@@ -9,6 +9,9 @@
 FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_BREAK_SYSTEM_PACKAGES=1
+# /app on the path so `import core` resolves when CMD runs adapters/*.py
+# (running a script puts ITS dir on sys.path, not the workdir).
+ENV PYTHONPATH=/app
 ENV WEIGHTS_DIR=/weights MODEL_SIZE=5b
 
 # Auth: only the SHA-256 of the static API key is baked in (safe for a public
