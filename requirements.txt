@@ -1,0 +1,15 @@
+# Pinned for reproducible serverless images. torch/torchcodec must be a
+# compatible pair AND match the CUDA in the base image (see Dockerfile).
+# NOTE: RTX 5080 (Blackwell / sm_120) needs torch >= 2.7 + CUDA 12.8 — the pins
+# below target datacenter GPUs (H100/A100). Bump both for a Blackwell build.
+torch==2.4.0
+torchcodec==0.0.4
+numpy>=1.24
+requests>=2.31
+huggingface_hub>=0.24
+
+# serverless adapters
+runpod>=1.6
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6

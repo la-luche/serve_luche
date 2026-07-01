@@ -1,0 +1,2 @@
+# weights/*.pt2 are downloaded here by ./download_weights.sh and baked into the
+# image at build time. They are gitignored (large + gated).

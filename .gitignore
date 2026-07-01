@@ -1,0 +1,12 @@
+# baked weights are large + gated — never commit them
+weights/*.pt2
+weights/*.safetensors
+
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+out.json
+*.local.json
