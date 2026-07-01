@@ -11,6 +11,14 @@ FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-runtime
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_BREAK_SYSTEM_PACKAGES=1
 ENV WEIGHTS_DIR=/weights MODEL_SIZE=5b
 
+# Auth: only the SHA-256 of the static API key is baked in (safe for a public
+# image — the key itself never touches the repo/image). Handler checks
+# sha256(request.api_key) == API_KEY_SHA256. GIT_SHA lets you verify which build
+# a running container is (via the unauthenticated {"ping": true} request).
+ENV API_KEY_SHA256=88edc437185f02bf774f458a8f3e3404d6b9e49c89ceb3393a31cd5579f9d446
+ARG GIT_SHA=dev
+ENV GIT_SHA=${GIT_SHA}
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ffmpeg build-essential \
     && rm -rf /var/lib/apt/lists/*

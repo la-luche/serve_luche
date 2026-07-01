@@ -1,16 +1,29 @@
 """RunPod serverless entrypoint.
 
-Importing core.infer triggers the model load at module level (before
-serverless.start), which is what FlashBoot needs to snapshot a warm worker.
-The handler itself is a thin shim over run_video().
+- `{"input": {"ping": true}}`  -> unauthenticated build fingerprint (git_sha +
+  api_key_sha256 + model_size). Use it to verify which build a container runs.
+- Everything else requires `api_key` (checked by SHA-256 against the baked hash).
+
+The heavy Sapiens2 model is lazy-imported inside the video path so `ping` (and
+auth failures) return instantly without paying the ~5 min cold-load. The model
+loads on the first authenticated video job.
 """
+import os
+
 import runpod
 
-from core.infer import run_video
+from core import auth
 
 
 def handler(event):
     inp = event.get("input") or {}
+
+    if inp.get("ping"):
+        return auth.version()
+
+    if not auth.check(inp.get("api_key")):
+        return {"error": "unauthorized"}
+
     video_url = inp.get("video_url")
     if not video_url:
         return {"error": "missing 'video_url' in input"}
@@ -23,9 +36,13 @@ def handler(event):
         kwargs["batch_size"] = int(inp["batch_size"])
 
     try:
-        return run_video(video_url, **kwargs)
-    except Exception as e:  # surface the error to the job result
-        return {"error": f"{type(e).__name__}: {e}"}
+        from core.infer import run_video  # lazy: triggers model load on first job
+
+        result = run_video(video_url, **kwargs)
+        result["git_sha"] = os.environ.get("GIT_SHA", "unknown")
+        return result
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "git_sha": os.environ.get("GIT_SHA")}
 
 
 runpod.serverless.start({"handler": handler})

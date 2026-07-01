@@ -39,6 +39,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             ghcr.io/skovorp/serve_luche:latest
             ghcr.io/skovorp/serve_luche:${{ github.sha }}
