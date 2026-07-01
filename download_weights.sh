@@ -3,14 +3,17 @@
 # baked into the image (COPY weights/ in the Dockerfile).
 #
 # Sapiens is a GATED model on Hugging Face — you must accept the license once at
-# https://huggingface.co/facebook/sapiens-pose-2b-torchscript and provide a token.
+# https://huggingface.co/facebook/sapiens-pose-1b-torchscript and provide a token.
 #
 #   export HF_TOKEN=hf_xxx
-#   ./download_weights.sh                 # 2b (default)
+#   ./download_weights.sh                 # 1b (default)
 #   MODEL_SIZE=1b ./download_weights.sh   # smaller, faster for local dev
 set -euo pipefail
 
-MODEL_SIZE="${MODEL_SIZE:-2b}"
+# NOTE: there is NO 2b pose checkpoint. Original Sapiens pose tops out at 1b
+# (torchscript, ungated). 0.6b/0.3b are smaller. (Sapiens2 has a 5b pose model
+# but only as safetensors — needs custom model code, not torch.jit.load.)
+MODEL_SIZE="${MODEL_SIZE:-1b}"
 REPO="facebook/sapiens-pose-${MODEL_SIZE}-torchscript"
 DEST="$(dirname "$0")/weights"
 

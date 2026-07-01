@@ -41,10 +41,11 @@ def _find_weights() -> str:
             f"No *.pt2 weights found in {_WEIGHTS_DIR}. Run ./download_weights.sh "
             "or set WEIGHTS_PATH."
         )
-    # Prefer a 2b checkpoint if several are present.
-    for h in hits:
-        if "2b" in os.path.basename(h).lower():
-            return h
+    # Prefer the largest checkpoint if several are present (1b > 0.6b > 0.3b).
+    for size in ("5b", "2b", "1b", "0.6b", "0.3b"):
+        for h in hits:
+            if size in os.path.basename(h).lower():
+                return h
     return hits[0]
 
 

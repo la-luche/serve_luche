@@ -2,7 +2,7 @@
 
 Serverless keypoint detection. Send a **presigned R2 GET** for a video, get
 **308 Goliath whole-body keypoints per processed frame** written to R2 via a
-**presigned PUT**. Runs the Meta **Sapiens 2B** pose model (TorchScript, bf16) on
+**presigned PUT**. Runs the Meta **Sapiens 1B** pose model (TorchScript, bf16) on
 an H100. One image, thin adapters for **RunPod** and **Vast**.
 
 ## Design in one picture
@@ -80,12 +80,12 @@ RunPod FlashBoot snapshots a *warm* worker. Never move the load into the handler
 ## Performance notes / gotchas
 
 - **H100, batch 32-64:** ~1-3 min for a 3-min video (stride 2 ≈ 2,700 frames).
-  Tune `batch_size` up until just before OOM — the 2B fits easily in 80 GB.
+  Tune `batch_size` up until just before OOM — the 1B fits easily in 80 GB.
 - **Decode is often the bottleneck**, not the forward pass. We decode strided
   frames on GPU (torchcodec/NVDEC) to avoid H2D copies.
 - **RTX 5080 / Blackwell:** needs torch >= 2.7 + CUDA 12.8 (the pinned torch 2.4
-  has no `sm_120` kernels). 16 GB fits 2B only at small batch; consider the 1B
-  model locally (`MODEL_SIZE=1b ./download_weights.sh`).
+  has no `sm_120` kernels). 16 GB fits 1B fine; 0.6b is even lighter
+ .
 - **RGB vs BGR:** `core/postproc.py:INPUT_BGR` defaults to RGB. If step-2
   keypoints look mirrored/garbage, flip it — it's the #1 thing to check.
 - **Sub-pixel decode** is a light quarter-pixel Darkpose-style shift; swap in

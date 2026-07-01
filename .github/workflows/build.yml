@@ -33,7 +33,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           pip install "huggingface_hub>=0.24"
-          MODEL_SIZE=2b ./download_weights.sh
+          MODEL_SIZE=1b ./download_weights.sh
 
       - uses: docker/setup-buildx-action@v3
 
