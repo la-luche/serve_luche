@@ -1,11 +1,8 @@
 name: build-and-push
 
-# Builds the serverless image (amd64) and pushes to GHCR. Sapiens weights are
-# gated, so CI downloads them with an HF token secret, then bakes them in.
-#
-# Required repo secrets:
-#   HF_TOKEN  — a Hugging Face token that has accepted the Sapiens license
-# GITHUB_TOKEN is provided automatically and is used to push to GHCR.
+# Builds the portable Sapiens2 image (amd64) and pushes to GHCR. Weights are NOT
+# baked (fetched at runtime), so the build is just buildx + push — no secrets,
+# no HF token needed. GITHUB_TOKEN (auto) pushes to ghcr.io/skovorp/serve_luche.
 
 on:
   push:
@@ -22,18 +19,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # CUDA base + torch + 4GB weights is a fat image; reclaim runner disk.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af || true
           df -h
-
-      - name: Download Sapiens weights
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          pip install "huggingface_hub>=0.24"
-          MODEL_SIZE=1b ./download_weights.sh
 
       - uses: docker/setup-buildx-action@v3
 
@@ -50,7 +40,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/skovorp/serve_luche:latest
+            ghcr.io/skovorp/serve_luche:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
