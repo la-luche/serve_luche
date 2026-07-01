@@ -1,8 +1,11 @@
-"""Fetch a video and decode frames on the GPU (NVDEC via torchcodec).
+"""Fetch a video and decode strided, batched frames via decord.
 
-Decode is usually the bottleneck for this pipeline, not the 2B forward pass, so
-we (a) decode on-device to avoid H2D copies and (b) only decode the frames we
-actually keep (`frame_stride`). Frames come out as uint8 (B, C, H, W) on DEVICE.
+We use decord (CPU decode + H2D copy) rather than torchcodec/NVDEC: torchcodec's
+wheels are fragile (CUDA-version-coupled, and some ship ops for only one backend
+-> `NotImplementedError: ... scan_all_streams_to_update_metadata ... CPU`).
+decord is a single portable wheel that Just Works. Decode is not the bottleneck
+for the heavy Sapiens forward pass, so CPU decode is an acceptable trade for
+reliability. Frames come out as uint8 (B, C, H, W) RGB on DEVICE.
 """
 from __future__ import annotations
 
@@ -35,34 +38,30 @@ def fetch_to_local(video_url: str, chunk: int = 1 << 20) -> tuple[str, bool]:
 
 
 class Decoder:
-    """Thin wrapper over torchcodec giving strided, batched GPU frame tensors."""
+    """Thin wrapper over decord giving strided, batched frame tensors on DEVICE."""
 
     def __init__(self, local_path: str):
         try:
-            from torchcodec.decoders import VideoDecoder
+            from decord import VideoReader, cpu
         except ImportError as e:  # pragma: no cover
-            raise RuntimeError(
-                "torchcodec is required for decoding. `pip install torchcodec` "
-                "and ensure ffmpeg is installed."
-            ) from e
+            raise RuntimeError("decord is required for decoding: `pip install decord`") from e
 
-        # Fall back to CPU decode if the GPU decoder can't init (e.g. no NVDEC).
-        try:
-            self._dec = VideoDecoder(local_path, device=DEVICE)
-        except Exception:
-            self._dec = VideoDecoder(local_path, device="cpu")
-
-        md = self._dec.metadata
-        self.fps = float(getattr(md, "average_fps", None) or 30.0)
-        self.num_frames = int(getattr(md, "num_frames", 0) or len(self._dec))
+        self._vr = VideoReader(local_path, ctx=cpu(0))
+        self.fps = float(self._vr.get_avg_fps() or 30.0)
+        self.num_frames = len(self._vr)
 
     def iter_batches(
         self, frame_stride: int, batch_size: int
     ) -> Iterator[tuple[list[int], torch.Tensor]]:
-        """Yield (frame_indices, frames uint8 (B,C,H,W) on DEVICE) in order."""
+        """Yield (frame_indices, frames uint8 (B,C,H,W) RGB on DEVICE) in order."""
         indices = list(range(0, self.num_frames, max(1, frame_stride)))
         for i in range(0, len(indices), batch_size):
             chunk = indices[i : i + batch_size]
-            batch = self._dec.get_frames_at(indices=chunk)  # FrameBatch
-            frames = batch.data.to(DEVICE, non_blocking=True)  # (B,C,H,W) uint8
+            arr = self._vr.get_batch(chunk).asnumpy()  # (B,H,W,C) uint8 RGB
+            frames = (
+                torch.from_numpy(arr)
+                .permute(0, 3, 1, 2)
+                .contiguous()
+                .to(DEVICE, non_blocking=True)
+            )
             yield chunk, frames

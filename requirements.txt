@@ -3,7 +3,7 @@
 # NOTE: RTX 5080 (Blackwell / sm_120) needs torch >= 2.7 + CUDA 12.8 — the pins
 # below target datacenter GPUs (H100/A100). Bump both for a Blackwell build.
 torch==2.4.0
-torchcodec==0.0.4
+decord>=0.6.0
 numpy>=1.24
 requests>=2.31
 huggingface_hub>=0.24

@@ -77,12 +77,36 @@ PyWorker template's forward URL + BenchmarkConfig at `/infer`. Same `core/`.
 The model loads at **import** in `core/model.py` (before `serverless.start`), so
 RunPod FlashBoot snapshots a *warm* worker. Never move the load into the handler.
 
-## Performance notes / gotchas
+## Measured on one H100 80GB (batch 32, 1080p, stride 2 = 2,700 frames)
 
-- **H100, batch 32-64:** ~1-3 min for a 3-min video (stride 2 ≈ 2,700 frames).
-  Tune `batch_size` up until just before OOM — the 1B fits easily in 80 GB.
-- **Decode is often the bottleneck**, not the forward pass. We decode strided
-  frames on GPU (torchcodec/NVDEC) to avoid H2D copies.
+| Model | Keypoints | End-to-end fps | Forward-only fps | 3-min video |
+|-------|-----------|----------------|------------------|-------------|
+| **1B Goliath**   | 308 (dense face) | 22.9 | 26.2 | **118 s** |
+| **2B WholeBody** | 133 (21/hand, fingers) | 14.8 | 17.5 | **183 s** |
+
+- Batch 32 ≈ batch 64 (118.2 s vs 118.8 s) → **compute-bound on the ViT forward**;
+  bigger batches don't help. Batch 64 used only 38 GB of 80 GB.
+- **Decode is NOT the bottleneck here** (initial assumption was wrong): decord CPU
+  decode is only ~15 s = **13%** of wall time; the forward is ~87%. GPU/NVDEC decode
+  buys little for this model at 1024x768 — model math is the wall.
+- There is **no 2B *Goliath* (308-kp)** checkpoint — 2B pose maxes at 133-kp
+  WholeBody. 308-kp Goliath tops out at 1B. Both hosted (gated) on
+  `noahcao/sapiens-pose-coco`; 1B Goliath also ungated on `facebook/sapiens-pose-1b-torchscript`.
+
+## Compile / speedup attempts — all FAILED on the shipped checkpoints
+
+The public Sapiens `.pt2` are **frozen TorchScript mmpose "topdown" wrappers**, not
+clean tensor-in/out modules, so they resist off-the-shelf recompilation:
+- `torch.compile` — N/A (needs eager nn.Module, not a ScriptModule).
+- **Torch-TensorRT** TS frontend — `Unable to freeze tensor` / graphShapeAnalyzer
+  assertion on the ViT graph (TensorRT 10).
+- **ONNX export** — fails in the TorchScript interpreter on the mmpose wrapper.
+
+Only remaining path to a TRT/fp8 speedup: rebuild the **eager** model (mmpose +
+Sapiens code + the *non*-TorchScript checkpoint), then dynamo-TRT. Multi-hour effort.
+
+## Gotchas
+
 - **RTX 5080 / Blackwell:** needs torch >= 2.7 + CUDA 12.8 (the pinned torch 2.4
   has no `sm_120` kernels). 16 GB fits 1B fine; 0.6b is even lighter
  .
