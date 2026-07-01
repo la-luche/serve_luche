@@ -27,9 +27,8 @@ app = FastAPI(title="sapiens-serve")
 class InferRequest(BaseModel):
     video_url: str
     result_put_url: str | None = None
-    frame_stride: int = 2
+    frame_stride: int = 1  # default: every frame
     batch_size: int = DEFAULT_BATCH_SIZE
-    include_conf: bool = True
 
 
 @app.get("/healthz")
@@ -45,7 +44,6 @@ def infer(req: InferRequest):
             result_put_url=req.result_put_url,
             frame_stride=req.frame_stride,
             batch_size=req.batch_size,
-            include_conf=req.include_conf,
         )
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}

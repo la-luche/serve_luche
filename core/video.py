@@ -50,18 +50,16 @@ class Decoder:
         self.fps = float(self._vr.get_avg_fps() or 30.0)
         self.num_frames = len(self._vr)
 
-    def iter_batches(
+    def iter_batches_np(
         self, frame_stride: int, batch_size: int
-    ) -> Iterator[tuple[list[int], torch.Tensor]]:
-        """Yield (frame_indices, frames uint8 (B,C,H,W) RGB on DEVICE) in order."""
+    ) -> Iterator[tuple[list[int], list]]:
+        """Yield (frame_indices, [HWC uint8 RGB numpy frames]) in order.
+
+        Sapiens2's top-down pipeline (`model.pipeline`) takes a numpy HWC image as
+        `data_info['img']`, so we hand it decord's frames directly.
+        """
         indices = list(range(0, self.num_frames, max(1, frame_stride)))
         for i in range(0, len(indices), batch_size):
             chunk = indices[i : i + batch_size]
             arr = self._vr.get_batch(chunk).asnumpy()  # (B,H,W,C) uint8 RGB
-            frames = (
-                torch.from_numpy(arr)
-                .permute(0, 3, 1, 2)
-                .contiguous()
-                .to(DEVICE, non_blocking=True)
-            )
-            yield chunk, frames
+            yield chunk, [arr[j] for j in range(arr.shape[0])]

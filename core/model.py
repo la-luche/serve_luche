@@ -1,13 +1,12 @@
-"""Load the Sapiens pose TorchScript model ONCE, at import time.
+"""Load Sapiens2 pose model ONCE at import, bf16 + torch.compile (warm worker).
 
-Loading at import (not lazily inside the request handler) is what lets RunPod
-FlashBoot snapshot a *warm* worker — otherwise every cold start re-pays the
-~4 GB weight load. See README "Cold start".
-
-The weights (`*.pt2`) are baked into the image under ./weights/ (or point
-WEIGHTS_PATH at a specific file). We support both the fp32 `-torchscript`
-checkpoint (run under bf16 autocast) and the `-bfloat16` checkpoint (params
-already bf16). Which one is loaded is auto-detected from the params' dtype.
+Portable across RunPod / Vast: the 20 GB checkpoint is NOT baked into the image.
+On first init we ensure it exists under $WEIGHTS_DIR (download from HF — ungated),
+which each platform points at its own persistent storage:
+  RunPod -> WEIGHTS_DIR=/runpod-volume   (network volume, persists across cold starts)
+  Vast   -> WEIGHTS_DIR=/workspace       (instance disk)
+The Inductor compile-cache also lives under $WEIGHTS_DIR so the ~2 min compile is
+paid once, not on every cold start.
 """
 from __future__ import annotations
 
@@ -16,62 +15,69 @@ import os
 
 import torch
 
-# Sapiens pose input is H=1024, W=768 (see the goliath 1024x768 config).
-MODEL_INPUT_H = 1024
-MODEL_INPUT_W = 768
+MODEL_SIZE = os.environ.get("MODEL_SIZE", "5b")           # 0.4b/0.8b/1b/5b
+WEIGHTS_DIR = os.environ.get("WEIGHTS_DIR", "/weights")
+HF_REPO = f"facebook/sapiens2-pose-{MODEL_SIZE}"
+CKPT_NAME = f"sapiens2_{MODEL_SIZE}_pose.safetensors"
 
-# ImageNet-style normalization on the 0-255 pixel scale (Sapiens pose default).
-# NOTE: order here is R,G,B. If INPUT_BGR is flipped in postproc, the mean/std
-# are reordered there to match.
-NORM_MEAN = (123.675, 116.28, 103.53)
-NORM_STD = (58.395, 57.12, 57.375)
+# Persist Inductor's compiled kernels on the shared volume across cold starts.
+os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(WEIGHTS_DIR, "inductor_cache"))
 
-_WEIGHTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "weights")
+_COMPILE = os.environ.get("COMPILE", "1") == "1"
 
 
-def _find_weights() -> str:
-    explicit = os.environ.get("WEIGHTS_PATH")
-    if explicit:
-        if not os.path.isfile(explicit):
-            raise FileNotFoundError(f"WEIGHTS_PATH={explicit} does not exist")
-        return explicit
-    hits = sorted(glob.glob(os.path.join(_WEIGHTS_DIR, "*.pt2")))
+def _find_config() -> str:
+    """The keypoints308 config .py ships inside the installed sapiens2 package."""
+    import sapiens  # noqa: F401  (installed via `pip install -e` of the sapiens2 repo)
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(sapiens.__file__)))
+    pattern = os.path.join(
+        root, "sapiens", "pose", "configs", "keypoints308", "*",
+        f"sapiens2_{MODEL_SIZE}_keypoints308_*-1024x768.py",
+    )
+    hits = glob.glob(pattern)
     if not hits:
-        raise FileNotFoundError(
-            f"No *.pt2 weights found in {_WEIGHTS_DIR}. Run ./download_weights.sh "
-            "or set WEIGHTS_PATH."
-        )
-    # Prefer the largest checkpoint if several are present (1b > 0.6b > 0.3b).
-    for size in ("5b", "2b", "1b", "0.6b", "0.3b"):
-        for h in hits:
-            if size in os.path.basename(h).lower():
-                return h
+        raise FileNotFoundError(f"no sapiens2 config matching {pattern}")
     return hits[0]
 
 
-def _load():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    path = _find_weights()
-    model = torch.jit.load(path, map_location=device).eval().to(device)
-    params = list(model.parameters())
-    dtype = params[0].dtype if params else torch.float32
+def _ensure_checkpoint() -> str:
+    path = os.path.join(WEIGHTS_DIR, CKPT_NAME)
+    if os.path.isfile(path):
+        return path
+    os.makedirs(WEIGHTS_DIR, exist_ok=True)
+    from huggingface_hub import hf_hub_download
 
-    # Warm up so cuDNN autotune + FlashBoot snapshot capture the real kernels.
-    if device == "cuda":
-        run_dtype = dtype if dtype != torch.float32 else torch.float32
-        dummy = torch.zeros(
-            1, 3, MODEL_INPUT_H, MODEL_INPUT_W, device=device, dtype=run_dtype
-        )
-        autocast = dtype == torch.float32
-        with torch.inference_mode(), torch.autocast(
-            "cuda", dtype=torch.bfloat16, enabled=autocast
-        ):
-            model(dummy)
+    # ungated download; token optional (HF_TOKEN honored if set)
+    src = hf_hub_download(
+        repo_id=HF_REPO, filename=CKPT_NAME, local_dir=WEIGHTS_DIR,
+        token=os.environ.get("HF_TOKEN"),
+    )
+    return src
+
+
+def _load():
+    from sapiens.pose.models import init_model
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    cfg = _find_config()
+    ckpt = _ensure_checkpoint()
+    model = init_model(cfg, ckpt, device=device)
+    model.eval()
+    model = model.to(torch.bfloat16)
+
+    fwd = model
+    if _COMPILE and device == "cuda":
+        fwd = torch.compile(model)  # default mode (max-autotune gave no gain on 5B)
+        # warm up + populate the on-disk inductor cache
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            dummy = torch.randn(1, 3, 1024, 768, device=device, dtype=torch.bfloat16)
+            fwd(dummy)
         torch.cuda.synchronize()
 
-    return model, device, dtype, path
+    return model, fwd, device
 
 
-MODEL, DEVICE, MODEL_DTYPE, WEIGHTS_FILE = _load()
-# True when we should wrap the forward pass in bf16 autocast (fp32 model on GPU).
-USE_AUTOCAST = DEVICE == "cuda" and MODEL_DTYPE == torch.float32
+# MODEL keeps .pipeline/.data_preprocessor/.codec/.cfg/.pose_metainfo (eager wrapper);
+# FORWARD is the compiled callable used for the heavy forward pass.
+MODEL, FORWARD, DEVICE = _load()

@@ -17,8 +17,7 @@ def handler(event):
 
     kwargs = {
         "result_put_url": inp.get("result_put_url"),
-        "frame_stride": int(inp.get("frame_stride", 2)),
-        "include_conf": bool(inp.get("include_conf", True)),
+        "frame_stride": int(inp.get("frame_stride", 1)),  # default: every frame
     }
     if inp.get("batch_size"):
         kwargs["batch_size"] = int(inp["batch_size"])

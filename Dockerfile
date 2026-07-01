@@ -1,32 +1,29 @@
-# Sapiens 2B keypoint serverless image. One image, multiple entrypoints
-# (RunPod handler / Vast FastAPI). Weights are baked in for warm cold-starts.
+# Sapiens2 pose keypoint serverless image — PORTABLE across RunPod + Vast.
+# Weights are NOT baked (5B is 20 GB); they're fetched at startup into $WEIGHTS_DIR
+# (RunPod network volume / Vast instance disk) and cached there, along with the
+# Inductor compile-cache. One image, two entrypoints (RunPod handler / Vast FastAPI).
 #
-# Build for the deploy target's arch (amd64 GPU hosts):
-#   docker buildx build --platform linux/amd64 -t ghcr.io/<you>/sapiens-serve:latest --push .
-#
-# Weights must exist in ./weights/*.pt2 at build time (run ./download_weights.sh
-# first, or let CI download them — see .github/workflows/build.yml).
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+# Build (native amd64 on a real Docker host, e.g. the 5080 box, or GH Actions):
+#   docker build -t ghcr.io/skovorp/serve_luche:latest . && docker push ...
+FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-devel
 
-ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-pip ffmpeg \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3 /usr/bin/python
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_BREAK_SYSTEM_PACKAGES=1
+ENV WEIGHTS_DIR=/weights MODEL_SIZE=5b
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 \
-        torch==2.4.0 \
-    && pip install --no-cache-dir -r requirements.txt
+# Sapiens2 (clean deps: torch/torchvision/transformers/timm — no mmcv/mmpose).
+RUN git clone --depth 1 https://github.com/facebookresearch/sapiens2.git /opt/sapiens2 \
+    && pip install --no-cache-dir -e /opt/sapiens2
 
-# Bake the model in (the ~4GB COPY that makes FlashBoot worthwhile).
-COPY weights/ /app/weights/
+RUN pip install --no-cache-dir decord requests huggingface_hub runpod fastapi uvicorn "torchao>=0.17"
+
 COPY core/ /app/core/
 COPY adapters/ /app/adapters/
 COPY run_local.py /app/
 
-# Default entrypoint = RunPod. Vast overrides CMD to launch the FastAPI worker:
-#   python adapters/vast_worker.py
+# Default entrypoint = RunPod. Vast overrides CMD -> python adapters/vast_worker.py
 CMD ["python", "-u", "adapters/runpod_handler.py"]
