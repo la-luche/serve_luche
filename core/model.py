@@ -64,6 +64,15 @@ def _load():
     ckpt = _ensure_checkpoint()
     model = init_model(cfg, ckpt, device=device)
     model.eval()
+
+    # init_model gives .pipeline/.data_preprocessor but NOT .codec — build the
+    # UDPHeatmap decoder from the config (as sapiens2's vis_pose demo does).
+    from sapiens.pose.datasets import UDPHeatmap
+
+    codec_cfg = dict(model.cfg.codec)
+    codec_cfg.pop("type", None)
+    model.codec = UDPHeatmap(**codec_cfg)
+
     model = model.to(torch.bfloat16)
 
     fwd = model

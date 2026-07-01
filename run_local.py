@@ -22,9 +22,8 @@ def main():
     ap.add_argument("--video", required=True, help="presigned GET url or local path")
     ap.add_argument("--out", help="write results JSON to this local path")
     ap.add_argument("--put-url", help="presigned R2 PUT url for results JSON")
-    ap.add_argument("--stride", type=int, default=2, help="process every Nth frame")
+    ap.add_argument("--stride", type=int, default=1, help="process every Nth frame")
     ap.add_argument("--batch", type=int, default=16)
-    ap.add_argument("--no-conf", action="store_true", help="drop confidence values")
     args = ap.parse_args()
 
     if not args.out and not args.put_url:
@@ -36,7 +35,6 @@ def main():
         result_local_path=args.out,
         frame_stride=args.stride,
         batch_size=args.batch,
-        include_conf=not args.no_conf,
     )
     print(json.dumps(summary, indent=2))
 
