@@ -99,12 +99,9 @@ def run_video(
             "num_processed_frames": n,
             "frames": frames_out,
         }
-        location = sink.emit(results, put_url=result_put_url, local_path=result_local_path)
-
         elapsed = round(time.time() - t0, 2)
-        return {
+        summary = {
             "status": "ok",
-            "results_location": location,
             "num_processed_frames": n,
             "num_source_frames": dec.num_frames,
             "source_fps": dec.fps,
@@ -114,6 +111,13 @@ def run_video(
             "infer_seconds": elapsed,
             "fps_processed": round(n / elapsed, 2) if elapsed else None,
         }
+        if result_put_url or result_local_path:
+            summary["results_location"] = sink.emit(
+                results, put_url=result_put_url, local_path=result_local_path
+            )
+        else:
+            summary["results"] = results  # inline (fine for short clips)
+        return summary
     finally:
         if is_temp:
             try:
