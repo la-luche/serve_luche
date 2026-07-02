@@ -5,6 +5,11 @@ Serverless keypoint detection. Send a **presigned R2 GET** for a video, get
 **presigned PUT**. Runs the Meta **Sapiens 1B** pose model (TorchScript, bf16) on
 an H100. One image, thin adapters for **RunPod** and **Vast**.
 
+> **API reference: [`docs/API.md`](docs/API.md)** — auth, request/response,
+> keypoint indices, curl examples. (The request/response snippets below are v1 and
+> outdated; docs/API.md is authoritative.)
+
+
 ## Design in one picture
 
 ```
