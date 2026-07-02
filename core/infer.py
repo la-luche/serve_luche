@@ -46,9 +46,15 @@ def run_video(
         n = 0
         for indices, frames in dec.iter_batches(frame_stride, batch_size, DEVICE):
             x = pre(frames)  # (B,3,1024,768) bf16 on GPU (model is bf16 too)
+            real = x.shape[0]
+            if real < batch_size:
+                # pad the last partial batch up to batch_size so FORWARD always
+                # sees ONE input shape -> torch.compile compiles once, not twice
+                pad = x[-1:].expand(batch_size - real, -1, -1, -1)
+                x = torch.cat([x, pad], dim=0)
             with torch.inference_mode():
-                pred = FORWARD(x)
-            pred = pred.float().cpu().numpy()  # B x K x hH x hW
+                pred = FORWARD(x)[:real]  # drop padded rows
+            pred = pred.float().cpu().numpy()  # real x K x hH x hW
 
             for j, fidx in enumerate(indices):
                 kps, scores = MODEL.codec.decode(pred[j])  # (1,K,2),(1,K) input space
