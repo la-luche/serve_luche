@@ -1,9 +1,10 @@
-"""run_video(): decode every frame -> Sapiens2 pose -> 308 keypoints -> R2.
+"""run_video(): decode -> batched GPU warp -> Sapiens2 -> 308 keypoints -> R2.
 
-Single-person / full-frame: bbox = whole frame. Follows sapiens2's
-`process_one_image` (model.pipeline -> data_preprocessor -> model(inputs) ->
-codec.decode -> map back to original pixels via bbox meta), batched across frames
-for GPU throughput. Keypoints land in ORIGINAL video pixel coordinates.
+Single-person / full-frame. Preprocessing (top-down UDP affine + normalize) is done
+batched on the GPU (core.preprocess), NOT the per-frame CPU mmpose pipeline — that
+was ~87% of wall time. codec.decode + the constant (input_size, bbox_center,
+bbox_scale) back-mapping reproduce the reference exactly. Keypoints land in ORIGINAL
+video pixel coordinates.
 """
 from __future__ import annotations
 
@@ -14,32 +15,12 @@ import numpy as np
 import torch
 
 from . import sink
-from .model import DEVICE, FORWARD, MODEL
+from .model import DEVICE, FORWARD, MODEL, USE_AUTOCAST
+from .preprocess import GpuPreprocessor
 from .video import Decoder, fetch_to_local
 
 DEFAULT_BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "16"))
 KEYPOINT_FORMAT = "sapiens2_keypoints308"
-
-
-def _prep(frame_np: np.ndarray):
-    h, w = frame_np.shape[:2]
-    data_info = {
-        "img": frame_np,
-        "bbox": np.array([[0, 0, w - 1, h - 1]], dtype=np.float32),
-        "bbox_score": np.ones(1, dtype=np.float32),
-    }
-    data = MODEL.pipeline(data_info)
-    data = MODEL.data_preprocessor(data)
-    return data["inputs"], data["data_samples"]
-
-
-def _meta(ds):
-    m = ds["meta"] if isinstance(ds, dict) and "meta" in ds else ds
-    return (
-        np.asarray(m["input_size"], dtype=np.float32),
-        np.asarray(m["bbox_center"], dtype=np.float32),
-        np.asarray(m["bbox_scale"], dtype=np.float32),
-    )
 
 
 def run_video(
@@ -56,24 +37,23 @@ def run_video(
     local_path, is_temp = fetch_to_local(video_url)
     try:
         dec = Decoder(local_path)
+        pre = GpuPreprocessor(dec.height, dec.width, DEVICE, dtype=torch.bfloat16)
+        input_size = np.asarray(pre.meta["input_size"], dtype=np.float32)
+        bbox_center = np.asarray(pre.meta["bbox_center"], dtype=np.float32)
+        bbox_scale = np.asarray(pre.meta["bbox_scale"], dtype=np.float32)
+
         frames_out: list[dict] = []
         n = 0
-
-        for indices, frames in dec.iter_batches_np(frame_stride, batch_size):
-            inputs_list, samples = [], []
-            for f in frames:
-                inp, ds = _prep(f)
-                inputs_list.append(inp)
-                samples.append(ds)
-            inputs = torch.cat(inputs_list, dim=0).to(DEVICE, dtype=torch.bfloat16)
-
-            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                pred = FORWARD(inputs)
+        for indices, frames in dec.iter_batches(frame_stride, batch_size, DEVICE):
+            x = pre(frames)  # (B,3,1024,768) bf16 on GPU
+            with torch.inference_mode(), torch.autocast(
+                "cuda", dtype=torch.bfloat16, enabled=USE_AUTOCAST
+            ):
+                pred = FORWARD(x)
             pred = pred.float().cpu().numpy()  # B x K x hH x hW
 
             for j, fidx in enumerate(indices):
-                kps, scores = MODEL.codec.decode(pred[j])  # (1,K,2), (1,K) in input space
-                input_size, bbox_center, bbox_scale = _meta(samples[j])
+                kps, scores = MODEL.codec.decode(pred[j])  # (1,K,2),(1,K) input space
                 kps = kps / input_size * bbox_scale + bbox_center - 0.5 * bbox_scale
                 kps, scores = kps[0], scores[0]
                 frames_out.append({
@@ -99,6 +79,7 @@ def run_video(
             "num_processed_frames": n,
             "frames": frames_out,
         }
+
         elapsed = round(time.time() - t0, 2)
         summary = {
             "status": "ok",
@@ -116,7 +97,7 @@ def run_video(
                 results, put_url=result_put_url, local_path=result_local_path
             )
         else:
-            summary["results"] = results  # inline (fine for short clips)
+            summary["results"] = results
         return summary
     finally:
         if is_temp:

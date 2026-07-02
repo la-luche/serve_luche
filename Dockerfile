@@ -32,7 +32,7 @@ WORKDIR /app
 RUN git clone --depth 1 https://github.com/facebookresearch/sapiens2.git /opt/sapiens2 \
     && pip install --no-cache-dir -e /opt/sapiens2
 
-RUN pip install --no-cache-dir decord requests huggingface_hub runpod fastapi uvicorn
+RUN pip install --no-cache-dir decord kornia requests huggingface_hub runpod fastapi uvicorn
 
 COPY core/ /app/core/
 COPY adapters/ /app/adapters/
