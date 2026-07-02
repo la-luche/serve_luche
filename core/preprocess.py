@@ -15,7 +15,10 @@ import numpy as np
 import torch
 from kornia.geometry.transform import warp_affine
 
-from sapiens.pose.src.datasets.transforms.bbox_transforms import (
+# NOTE: sapiens/pose/__init__.py merges the physical `src/` dir into the
+# `sapiens.pose` namespace, so the canonical path drops `src` (matching how
+# `from sapiens.pose.datasets import UDPHeatmap` works).
+from sapiens.pose.datasets.transforms.bbox_transforms import (
     bbox_xyxy2cs,
     get_udp_warp_matrix,
 )

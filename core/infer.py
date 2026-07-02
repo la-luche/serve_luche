@@ -15,7 +15,7 @@ import numpy as np
 import torch
 
 from . import sink
-from .model import DEVICE, FORWARD, MODEL, USE_AUTOCAST
+from .model import DEVICE, FORWARD, MODEL
 from .preprocess import GpuPreprocessor
 from .video import Decoder, fetch_to_local
 
@@ -45,10 +45,8 @@ def run_video(
         frames_out: list[dict] = []
         n = 0
         for indices, frames in dec.iter_batches(frame_stride, batch_size, DEVICE):
-            x = pre(frames)  # (B,3,1024,768) bf16 on GPU
-            with torch.inference_mode(), torch.autocast(
-                "cuda", dtype=torch.bfloat16, enabled=USE_AUTOCAST
-            ):
+            x = pre(frames)  # (B,3,1024,768) bf16 on GPU (model is bf16 too)
+            with torch.inference_mode():
                 pred = FORWARD(x)
             pred = pred.float().cpu().numpy()  # B x K x hH x hW
 
