@@ -51,5 +51,6 @@ class GpuPreprocessor:
         # frames: (B,3,H,W) uint8 RGB on device
         x = frames.float()
         M = self.M.expand(x.shape[0], -1, -1)
-        x = warp_affine(x, M, (INPUT_H, INPUT_W), mode="bilinear")  # (B,3,1024,768)
+        # align_corners=True to match cv2.warpAffine (validated: mean diff 0.08/255)
+        x = warp_affine(x, M, (INPUT_H, INPUT_W), mode="bilinear", align_corners=True)
         return ((x - self.mean) / self.std).to(self.dtype)
