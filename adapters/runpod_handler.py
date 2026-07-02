@@ -13,6 +13,7 @@ import os
 import runpod
 
 from core import auth
+from core.log import log
 
 
 def handler(event):
@@ -22,7 +23,9 @@ def handler(event):
         return auth.version()
 
     if not auth.check(inp.get("api_key")):
+        log("job rejected: unauthorized")
         return {"error": "unauthorized"}
+    log(f"job accepted: stride={inp.get('frame_stride', 1)} batch={inp.get('batch_size')}")
 
     video_url = inp.get("video_url")
     if not video_url:

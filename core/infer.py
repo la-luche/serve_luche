@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from . import sink
+from .log import log
 from .model import DEVICE, FORWARD, MODEL
 from .preprocess import GpuPreprocessor
 from .video import Decoder, fetch_to_local
@@ -34,7 +35,9 @@ def run_video(
     conf_round: int = 3,
 ) -> dict:
     t0 = time.time()
+    log(f"run_video stride={frame_stride} batch={batch_size} — fetching video...")
     local_path, is_temp = fetch_to_local(video_url)
+    log(f"video fetched in {time.time() - t0:.1f}s")
     try:
         dec = Decoder(local_path)
         pre = GpuPreprocessor(dec.height, dec.width, DEVICE, dtype=torch.bfloat16)
@@ -42,20 +45,38 @@ def run_video(
         bbox_center = np.asarray(pre.meta["bbox_center"], dtype=np.float32)
         bbox_scale = np.asarray(pre.meta["bbox_scale"], dtype=np.float32)
 
+        cuda = DEVICE == "cuda"
+        nbatches = (len(range(0, dec.num_frames, max(1, frame_stride))) + batch_size - 1) // batch_size
+        log(f"video {dec.width}x{dec.height} {dec.fps:.1f}fps {dec.num_frames} frames | "
+            f"stride={frame_stride} batch={batch_size} -> {nbatches} batches")
+
+        t_dec = t_pre = t_fwd = t_codec = 0.0
         frames_out: list[dict] = []
         n = 0
-        for indices, frames in dec.iter_batches(frame_stride, batch_size, DEVICE):
+        tprev = time.time()
+        for bi, (indices, frames) in enumerate(dec.iter_batches(frame_stride, batch_size, DEVICE)):
+            t_dec += time.time() - tprev  # decode + H2D (iterator produced this batch)
+
+            t = time.time()
             x = pre(frames)  # (B,3,1024,768) bf16 on GPU (model is bf16 too)
             real = x.shape[0]
             if real < batch_size:
-                # pad the last partial batch up to batch_size so FORWARD always
-                # sees ONE input shape -> torch.compile compiles once, not twice
+                # pad last partial batch so FORWARD always sees ONE shape
                 pad = x[-1:].expand(batch_size - real, -1, -1, -1)
                 x = torch.cat([x, pad], dim=0)
+            if cuda:
+                torch.cuda.synchronize()
+            t_pre += time.time() - t
+
+            t = time.time()
             with torch.inference_mode():
                 pred = FORWARD(x)[:real]  # drop padded rows
-            pred = pred.float().cpu().numpy()  # real x K x hH x hW
+            if cuda:
+                torch.cuda.synchronize()
+            t_fwd += time.time() - t
 
+            t = time.time()
+            pred = pred.float().cpu().numpy()  # real x K x hH x hW
             for j, fidx in enumerate(indices):
                 kps, scores = MODEL.codec.decode(pred[j])  # (1,K,2),(1,K) input space
                 kps = kps / input_size * bbox_scale + bbox_center - 0.5 * bbox_scale
@@ -69,10 +90,21 @@ def run_video(
                         for k in range(len(scores))
                     ],
                 })
+            t_codec += time.time() - t
             n += len(indices)
+            if bi == 0 or (bi + 1) % 10 == 0 or bi == nbatches - 1:
+                el = time.time() - t0
+                log(f"batch {bi+1}/{nbatches} frame {n}/{dec.num_frames} | "
+                    f"decode {t_dec:.1f} warp {t_pre:.1f} fwd {t_fwd:.1f} codec {t_codec:.1f}s "
+                    f"| {n/el:.1f} fps")
+            tprev = time.time()
 
-        if DEVICE == "cuda":
+        if cuda:
             torch.cuda.synchronize()
+        el = time.time() - t0
+        log(f"DONE {n} frames in {el:.1f}s = {n/el:.1f} fps | stages: "
+            f"decode {t_dec:.1f}s ({100*t_dec/el:.0f}%) warp {t_pre:.1f}s ({100*t_pre/el:.0f}%) "
+            f"fwd {t_fwd:.1f}s ({100*t_fwd/el:.0f}%) codec {t_codec:.1f}s ({100*t_codec/el:.0f}%)")
 
         results = {
             "keypoint_format": KEYPOINT_FORMAT,

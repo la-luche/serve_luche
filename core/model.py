@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import glob
 import os
+import time
 
 import torch
+
+from .log import log
 
 MODEL_SIZE = os.environ.get("MODEL_SIZE", "5b")           # 0.4b/0.8b/1b/5b
 WEIGHTS_DIR = os.environ.get("WEIGHTS_DIR", "/weights")
@@ -44,15 +47,19 @@ def _find_config() -> str:
 def _ensure_checkpoint() -> str:
     path = os.path.join(WEIGHTS_DIR, CKPT_NAME)
     if os.path.isfile(path):
+        gb = os.path.getsize(path) / 1e9
+        log(f"checkpoint present ({gb:.1f} GB) at {path} — no download")
         return path
     os.makedirs(WEIGHTS_DIR, exist_ok=True)
     from huggingface_hub import hf_hub_download
 
-    # ungated download; token optional (HF_TOKEN honored if set)
+    log(f"downloading {CKPT_NAME} from {HF_REPO} -> {WEIGHTS_DIR} (20 GB for 5b)...")
+    t = time.time()
     src = hf_hub_download(
         repo_id=HF_REPO, filename=CKPT_NAME, local_dir=WEIGHTS_DIR,
         token=os.environ.get("HF_TOKEN"),
     )
+    log(f"checkpoint downloaded in {time.time() - t:.1f}s")
     return src
 
 
@@ -60,10 +67,15 @@ def _load():
     from sapiens.pose.models import init_model
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    log(f"loading model: size={MODEL_SIZE} device={device} compile={_COMPILE} "
+        f"weights_dir={WEIGHTS_DIR}")
     cfg = _find_config()
     ckpt = _ensure_checkpoint()
+
+    t = time.time()
     model = init_model(cfg, ckpt, device=device)
     model.eval()
+    log(f"init_model done in {time.time() - t:.1f}s")
 
     # init_model gives .pipeline/.data_preprocessor but NOT .codec — build the
     # UDPHeatmap decoder from the config (as sapiens2's vis_pose demo does).
@@ -72,17 +84,15 @@ def _load():
     codec_cfg = dict(model.cfg.codec)
     codec_cfg.pop("type", None)
     model.codec = UDPHeatmap(**codec_cfg)
-
     model = model.to(torch.bfloat16)
+    log("model -> bf16, codec attached")
 
     fwd = model
     if _COMPILE and device == "cuda":
-        fwd = torch.compile(model)  # default mode (max-autotune gave no gain on 5B)
-        # warm up + populate the on-disk inductor cache
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            dummy = torch.randn(1, 3, 1024, 768, device=device, dtype=torch.bfloat16)
-            fwd(dummy)
-        torch.cuda.synchronize()
+        log("torch.compile enabled — compiling on first forward (can take minutes)")
+        fwd = torch.compile(model)
+    else:
+        log("torch.compile DISABLED — running eager")
 
     return model, fwd, device
 
