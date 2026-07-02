@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from . import sink
+from .decode import GpuDecoder
 from .log import log
 from .model import DEVICE, FORWARD, MODEL
 from .preprocess import GpuPreprocessor
@@ -22,6 +23,13 @@ from .video import Decoder, fetch_to_local
 
 DEFAULT_BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "16"))
 KEYPOINT_FORMAT = "sapiens2_keypoints308"
+
+# GPU heatmap->keypoint decoder (DARK-UDP on GPU). Falls back to the CPU codec on
+# non-cuda (e.g. local mac tests).
+_DECODER = (
+    GpuDecoder(MODEL.codec.blur_kernel_size, MODEL.codec.input_size, DEVICE)
+    if DEVICE == "cuda" else None
+)
 
 
 def run_video(
@@ -70,25 +78,28 @@ def run_video(
 
             t = time.time()
             with torch.inference_mode():
-                pred = FORWARD(x)[:real]  # drop padded rows
+                pred = FORWARD(x)[:real].float()  # (real,K,hH,hW) on GPU
             if cuda:
                 torch.cuda.synchronize()
             t_fwd += time.time() - t
 
             t = time.time()
-            pred = pred.float().cpu().numpy()  # real x K x hH x hW
+            if _DECODER is not None:
+                coords, scores = _DECODER.decode(pred)  # GPU DARK-UDP, (real,K,2),(real,K)
+            else:  # cpu fallback
+                pn = pred.cpu().numpy()
+                cs = [MODEL.codec.decode(pn[j]) for j in range(pn.shape[0])]
+                coords = np.stack([c[0][0] for c in cs]); scores = np.stack([c[1][0] for c in cs])
+            # input-space -> original pixels (vectorized), then round
+            coords = coords / input_size * bbox_scale + bbox_center - 0.5 * bbox_scale
+            coords = np.round(coords, coord_round)
+            scores = np.round(scores, conf_round)
             for j, fidx in enumerate(indices):
-                kps, scores = MODEL.codec.decode(pred[j])  # (1,K,2),(1,K) input space
-                kps = kps / input_size * bbox_scale + bbox_center - 0.5 * bbox_scale
-                kps, scores = kps[0], scores[0]
+                ck, sk = coords[j], scores[j]
                 frames_out.append({
                     "frame_idx": int(fidx),
-                    "keypoints": [
-                        [round(float(kps[k][0]), coord_round),
-                         round(float(kps[k][1]), coord_round),
-                         round(float(scores[k]), conf_round)]
-                        for k in range(len(scores))
-                    ],
+                    "keypoints": [[float(ck[k, 0]), float(ck[k, 1]), float(sk[k])]
+                                  for k in range(ck.shape[0])],
                 })
             t_codec += time.time() - t
             n += len(indices)
