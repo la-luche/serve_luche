@@ -1,9 +1,9 @@
 # sapiens-serve
 
 Serverless keypoint detection. Send a **presigned R2 GET** for a video, get
-**308 Goliath whole-body keypoints per processed frame** written to R2 via a
-**presigned PUT**. Runs the Meta **Sapiens 1B** pose model (TorchScript, bf16) on
-an H100. One image, thin adapters for **RunPod** and **Vast**.
+**presigned PUT**. Runs the Meta **Sapiens2 5B** pose model (safetensors,
+`torch.compile`, bf16) on an H100 and returns 308 Sociopticon whole-body
+keypoints. One image, thin adapters for **RunPod** and **Vast**.
 
 > **API reference: [`docs/API.md`](docs/API.md)** — auth, request/response,
 > keypoint indices, curl examples. (The request/response snippets below are v1 and
@@ -13,9 +13,9 @@ an H100. One image, thin adapters for **RunPod** and **Vast**.
 ## Design in one picture
 
 ```
-   [ build, no GPU ]                 [ run, needs H100 ]
-GitHub Actions (amd64) ── push ──►  GHCR  ── pull ──►  RunPod serverless
-   COPY weights .pt2                 (one image)       Vast workergroup
+   [ build, no GPU ]                     [ run, needs H100 ]
+GitHub Actions (amd64) ── push ──► GHCR ── pull ──► RunPod serverless
+                                           cached 5B model mount
 ```
 
 - `core/` — platform-agnostic inference (`run_video`). No RunPod/Vast imports.
@@ -55,23 +55,24 @@ keypoints are in **original video pixel coordinates**.
 
 ## Build order
 
-1. **Weights:** accept the Sapiens license, then
-   `export HF_TOKEN=hf_xxx && ./download_weights.sh` → `weights/*.pt2`.
-2. **Validate on a GPU box (do this before containerizing):** rent one H100
+1. **Validate on a GPU box (do this before containerizing):** rent one H100
    (Vast/RunPod pod), `pip install -r requirements.txt`, then
    `python run_local.py --video "$GET_URL" --put-url "$PUT_URL" --stride 2`.
    Confirm keypoints look sane and read the real per-video time.
-3. **Image:** push to GitHub → the `build-and-push` workflow builds amd64 and
-   pushes to `ghcr.io/<owner>/serve_luche`. (Needs repo secret `HF_TOKEN`.)
-4. **Deploy** the same image to both platforms (below).
+2. **Image:** push to GitHub → the `build-and-push` workflow builds amd64 and
+   pushes to `ghcr.io/<owner>/serve_luche`. No Hugging Face build secret is needed.
+3. **Deploy** the same image to both platforms (below).
 
 ## Deploy
 
-**RunPod:** create a Serverless endpoint from the GHCR image. Container start
-command is the image default (`python -u adapters/runpod_handler.py`). Set
-GPU = H100. Keep `min_workers=0` for cost (first request after each new image
-pays a cold start — FlashBoot snapshots are keyed to the image SHA); set `>=1`
-to eliminate cold starts.
+**RunPod (recommended):** create a queue-based Serverless endpoint from the GHCR
+image. In the endpoint's **Model** field select `facebook/sapiens2-pose-5b` so
+RunPod mounts the checkpoint from its model cache before starting the worker.
+The loader resolves that mount automatically. Keep the default container command
+(`python -u adapters/runpod_handler.py`), choose H100 80 GB, enable FlashBoot,
+set execution timeout and job TTL to 24 hours, and use one active worker while
+you need predictable latency. Set active workers back to zero when cost matters
+more than cold-start latency.
 
 **Vast:** create a workergroup from the same image with the start command
 overridden to `python adapters/vast_worker.py`, expose `$PORT`, and point the
@@ -79,8 +80,16 @@ PyWorker template's forward URL + BenchmarkConfig at `/infer`. Same `core/`.
 
 ## Cold start
 
-The model loads at **import** in `core/model.py` (before `serverless.start`), so
-RunPod FlashBoot snapshots a *warm* worker. Never move the load into the handler.
+RunPod's cached model avoids downloading the 20 GB checkpoint inside billed worker
+time, but PyTorch must still initialize the model and compile its first forward.
+One active worker removes that user-visible cold start. With zero active workers,
+FlashBoot helps subsequent starts but the first deployment can still be slow.
+
+Inference uses one fixed shape per configured batch size. A short final batch is
+padded to `BATCH_SIZE` before the compiled forward and sliced back afterward, so
+it does not trigger a second compilation. The production API does not override
+the image's `BATCH_SIZE=16`; changing that value between direct requests can
+create another compiled graph.
 
 ## Measured on one H100 80GB (batch 32, 1080p, stride 2 = 2,700 frames)
 

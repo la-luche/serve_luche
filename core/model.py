@@ -1,10 +1,11 @@
 """Load Sapiens2 pose model ONCE at import, bf16 + torch.compile (warm worker).
 
 Portable across RunPod / Vast: the 20 GB checkpoint is NOT baked into the image.
-On first init we ensure it exists under $WEIGHTS_DIR (download from HF — ungated),
-which each platform points at its own persistent storage:
-  RunPod -> WEIGHTS_DIR=/runpod-volume   (network volume, persists across cold starts)
-  Vast   -> WEIGHTS_DIR=/workspace       (instance disk)
+On RunPod, prefer its cached-model mount so the checkpoint is present before the
+worker starts and model download time is not billed. Otherwise ensure it exists
+under $WEIGHTS_DIR (download from HF — ungated):
+  RunPod cached model -> /runpod-volume/huggingface-cache/hub/...
+  RunPod/Vast fallback -> WEIGHTS_DIR (persistent storage when configured)
 The Inductor compile-cache also lives under $WEIGHTS_DIR so the ~2 min compile is
 paid once, not on every cold start.
 """
@@ -22,6 +23,9 @@ MODEL_SIZE = os.environ.get("MODEL_SIZE", "5b")           # 0.4b/0.8b/1b/5b
 WEIGHTS_DIR = os.environ.get("WEIGHTS_DIR", "/weights")
 HF_REPO = f"facebook/sapiens2-pose-{MODEL_SIZE}"
 CKPT_NAME = f"sapiens2_{MODEL_SIZE}_pose.safetensors"
+RUNPOD_HF_CACHE = os.environ.get(
+    "RUNPOD_HF_CACHE", "/runpod-volume/huggingface-cache/hub"
+)
 
 # Persist Inductor's compiled kernels on the shared volume across cold starts.
 os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(WEIGHTS_DIR, "inductor_cache"))
@@ -44,7 +48,38 @@ def _find_config() -> str:
     return hits[0]
 
 
+def _runpod_cached_checkpoint() -> str | None:
+    """Resolve a RunPod cached-model snapshot without copying the checkpoint.
+
+    RunPod follows Hugging Face's cache layout. Prefer the revision referenced by
+    ``refs/main`` and fall back to any complete snapshot, which also handles a
+    cache prepared without that ref file.
+    """
+    repo_dir = os.path.join(
+        RUNPOD_HF_CACHE, f"models--{HF_REPO.replace('/', '--')}"
+    )
+    ref_path = os.path.join(repo_dir, "refs", "main")
+    try:
+        with open(ref_path, encoding="utf-8") as f:
+            revision = f.read().strip()
+        candidate = os.path.join(repo_dir, "snapshots", revision, CKPT_NAME)
+        if revision and os.path.isfile(candidate):
+            return candidate
+    except OSError:
+        pass
+
+    snapshots = glob.glob(os.path.join(repo_dir, "snapshots", "*", CKPT_NAME))
+    complete = [path for path in snapshots if os.path.isfile(path)]
+    return max(complete, key=os.path.getmtime) if complete else None
+
+
 def _ensure_checkpoint() -> str:
+    cached = _runpod_cached_checkpoint()
+    if cached:
+        gb = os.path.getsize(cached) / 1e9
+        log(f"RunPod cached checkpoint present ({gb:.1f} GB) at {cached}")
+        return cached
+
     path = os.path.join(WEIGHTS_DIR, CKPT_NAME)
     if os.path.isfile(path):
         gb = os.path.getsize(path) / 1e9

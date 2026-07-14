@@ -1,7 +1,8 @@
 # Sapiens2 pose keypoint serverless image — PORTABLE across RunPod + Vast.
-# Weights are NOT baked (5B is 20 GB); fetched at startup into $WEIGHTS_DIR and
-# cached there (RunPod network volume / Vast instance disk), along with the
-# Inductor compile-cache. One image, two entrypoints (RunPod handler / Vast FastAPI).
+# Weights are NOT baked (5B is 20 GB). On RunPod, configure the cached model
+# `facebook/sapiens2-pose-5b`; elsewhere the worker downloads into $WEIGHTS_DIR.
+# The Inductor compile-cache is kept in $WEIGHTS_DIR. One image, two entrypoints
+# (RunPod handler / Vast FastAPI).
 #
 # runtime base (not devel) keeps the image ~10 GB so it builds on a free GH runner.
 # torch.compile only needs a C++ compiler (g++) + Triton, not nvcc — so we add

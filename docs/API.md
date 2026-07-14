@@ -135,12 +135,13 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
 
 - **Warm throughput (H100, 5B, compiled):** ~11 fps → a 30 s / 724-frame clip in
   ~65 s. Eager (no compile) ~8.6 fps.
-- **Cold start** (fresh worker): image pull + 20 GB weight download + ~1 min
-  compile — minutes. Attach a persistent volume (RunPod network volume / Vast
-  disk) at `WEIGHTS_DIR` to make cold starts fast (weights + Inductor compile
-  cache persist).
+- **Cold start** (fresh worker): image pull + model initialization + first-forward
+  compilation can still take minutes. On RunPod, configure the endpoint Model as
+  `facebook/sapiens2-pose-5b` to avoid downloading the 20 GB checkpoint in the
+  worker. Use one active worker when predictable latency matters.
 - **Env vars:** `MODEL_SIZE` (default `5b`), `WEIGHTS_DIR` (`/weights`),
-  `BATCH_SIZE` (`16`), `COMPILE` (`1`=torch.compile, `0`=eager),
+  `RUNPOD_HF_CACHE` (`/runpod-volume/huggingface-cache/hub`),
+  `BATCH_SIZE` (`16`), `COMPILE` (`1`=default Inductor `torch.compile`, `0`=eager),
   `API_KEY_SHA256`, `GIT_SHA`.
 - **Long videos:** pass `result_put_url` so the (potentially large) keypoint JSON
   goes to R2 instead of the HTTP response.
