@@ -10,3 +10,4 @@ venv/
 
 out.json
 *.local.json
+.batch_runs/
