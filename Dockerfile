@@ -40,7 +40,7 @@ RUN git clone --depth 1 https://github.com/facebookresearch/sapiens2.git /opt/sa
 # Pin the detector revision and save only its inference files into the image.
 # Download + cache removal happen in one layer so the final image has one copy.
 ARG PERSON_DETECTOR_REVISION=96317ca979e231bd960cb3cac31328e0165a3e94
-RUN HF_HOME=/tmp/hf-person-build python -c "from transformers import AutoImageProcessor, DetrForObjectDetection; repo='facebook/detr-resnet-101-dc5'; revision='${PERSON_DETECTOR_REVISION}'; dst='${PERSON_DETECTOR_DIR}'; AutoImageProcessor.from_pretrained(repo, revision=revision, use_fast=False).save_pretrained(dst); model=DetrForObjectDetection.from_pretrained(repo, revision=revision, use_pretrained_backbone=False); model.config.use_pretrained_backbone=False; model.save_pretrained(dst, safe_serialization=True)" \
+RUN HF_HOME=/tmp/hf-person-build python -c "from transformers import AutoConfig, AutoImageProcessor, DetrForObjectDetection; repo='facebook/detr-resnet-101-dc5'; revision='${PERSON_DETECTOR_REVISION}'; dst='${PERSON_DETECTOR_DIR}'; AutoImageProcessor.from_pretrained(repo, revision=revision, use_fast=False).save_pretrained(dst); config=AutoConfig.from_pretrained(repo, revision=revision); config.use_pretrained_backbone=False; model=DetrForObjectDetection.from_pretrained(repo, revision=revision, config=config); model.save_pretrained(dst, safe_serialization=True)" \
     && rm -rf /tmp/hf-person-build
 
 RUN pip install --no-cache-dir decord kornia requests huggingface_hub runpod fastapi uvicorn

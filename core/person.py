@@ -227,7 +227,7 @@ def interpolate_track(track: _Track, num_frames: int) -> np.ndarray:
 
 class PersonDetector:
     def __init__(self, device: str, model_source: str = DEFAULT_MODEL):
-        from transformers import AutoImageProcessor, DetrForObjectDetection
+        from transformers import AutoConfig, AutoImageProcessor, DetrForObjectDetection
 
         local_only = os.path.isdir(model_source)
         log(f"loading person detector from {model_source} on {device}")
@@ -235,13 +235,17 @@ class PersonDetector:
         self.processor = AutoImageProcessor.from_pretrained(
             model_source, local_files_only=local_only, use_fast=False
         )
-        self.model = DetrForObjectDetection.from_pretrained(
+        config = AutoConfig.from_pretrained(
             model_source,
             local_files_only=local_only,
-            # The full DETR checkpoint already contains the backbone. Leaving
-            # this true makes Transformers try to fetch a second timm ResNet at
-            # worker startup even when the DETR directory is baked and offline.
-            use_pretrained_backbone=False,
+        )
+        # The full DETR checkpoint already contains the backbone. Leaving this
+        # true makes Transformers try to fetch a second timm ResNet at worker
+        # startup. Setting it on the config works on Transformers 4.x and 5.x;
+        # passing it as a model kwarg stopped working in Transformers 5.x.
+        config.use_pretrained_backbone = False
+        self.model = DetrForObjectDetection.from_pretrained(
+            model_source, local_files_only=local_only, config=config
         ).to(device)
         self.model.eval()
         self.device = device
