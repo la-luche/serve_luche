@@ -10,6 +10,8 @@
 # build-essential and skip the multi-GB CUDA toolkit.
 FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-runtime@sha256:72f863fa1fe13d5d87a72d00db2c85fb2d43409ee08dd26bc469de4c8a28b427
 
+LABEL org.opencontainers.image.source="https://github.com/la-luche/serve_luche"
+
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_BREAK_SYSTEM_PACKAGES=1
 # /app on the path so `import core` resolves when CMD runs adapters/*.py
 # (running a script puts ITS dir on sys.path, not the workdir).

@@ -45,3 +45,15 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/serve_luche:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Make and verify worker package public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH \
+            -H "Accept: application/vnd.github.package-deletes-preview+json" \
+            "/orgs/${{ github.repository_owner }}/packages/container/serve_luche" \
+            -f visibility=public
+          test "$(gh api \
+            "/orgs/${{ github.repository_owner }}/packages/container/serve_luche" \
+            --jq .visibility)" = public
