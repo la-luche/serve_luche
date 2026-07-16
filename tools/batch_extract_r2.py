@@ -176,6 +176,10 @@ class RunPod:
         result_put_url: str,
         frame_stride: int,
         batch_size: int,
+        person_detection: bool,
+        person_detection_stride: int,
+        person_box_overflow: float,
+        person_detection_threshold: float,
     ) -> str:
         response = self.client.post(
             f"{RUNPOD_BASE}/{self.endpoint_id}/run",
@@ -186,6 +190,10 @@ class RunPod:
                     "result_put_url": result_put_url,
                     "frame_stride": frame_stride,
                     "batch_size": batch_size,
+                    "person_detection": person_detection,
+                    "person_detection_stride": person_detection_stride,
+                    "person_box_overflow": person_box_overflow,
+                    "person_detection_threshold": person_detection_threshold,
                 }
             },
         )
@@ -302,6 +310,10 @@ def run(args: argparse.Namespace) -> int:
                         r2.presign_put(item.output_key, args.url_ttl_seconds),
                         args.frame_stride,
                         args.batch_size,
+                        args.person_detection,
+                        args.person_detection_stride,
+                        args.person_box_overflow,
+                        args.person_detection_threshold,
                     )
                     item.attempts += 1
                     item.status = "submitted"
@@ -394,6 +406,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--frame-stride", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--person-detection", action="store_true")
+    parser.add_argument("--person-detection-stride", type=int, default=5)
+    parser.add_argument("--person-box-overflow", type=float, default=0.25)
+    parser.add_argument("--person-detection-threshold", type=float, default=0.3)
     parser.add_argument("--max-in-flight", type=int, default=2)
     parser.add_argument("--max-attempts", type=int, default=2)
     parser.add_argument("--poll-seconds", type=float, default=10.0)
@@ -402,8 +418,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if not args.source_key and not args.source_key_file and not args.source_prefix:
         parser.error("provide --source-key, --source-key-file, and/or --source-prefix")
-    if args.frame_stride < 1 or args.batch_size < 1 or args.max_in_flight < 1:
+    if (
+        args.frame_stride < 1
+        or args.batch_size < 1
+        or args.max_in_flight < 1
+        or args.person_detection_stride < 1
+    ):
         parser.error("frame stride, batch size, and max in-flight must be positive")
+    if not 0.0 <= args.person_box_overflow <= 2.0:
+        parser.error("person box overflow must be between 0 and 2")
+    if not 0.0 < args.person_detection_threshold <= 1.0:
+        parser.error("person detection threshold must be in (0, 1]")
     return args
 
 

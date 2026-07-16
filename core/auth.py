@@ -23,4 +23,7 @@ def version() -> dict:
         "git_sha": GIT_SHA,
         "api_key_sha256": _EXPECTED,
         "model_size": os.environ.get("MODEL_SIZE", "5b"),
+        "person_detector": os.environ.get(
+            "PERSON_DETECTOR_NAME", "facebook/detr-resnet-101-dc5"
+        ),
     }

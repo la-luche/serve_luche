@@ -1,10 +1,8 @@
-"""run_video(): decode -> batched GPU warp -> Sapiens2 -> 308 keypoints -> R2.
+"""run_video(): decode -> optional person boxes -> Sapiens2 keypoints -> R2.
 
-Single-person / full-frame. Preprocessing (top-down UDP affine + normalize) is done
-batched on the GPU (core.preprocess), NOT the per-frame CPU mmpose pipeline — that
-was ~87% of wall time. codec.decode + the constant (input_size, bbox_center,
-bbox_scale) back-mapping reproduce the reference exactly. Keypoints land in ORIGINAL
-video pixel coordinates.
+Preprocessing (top-down UDP affine + normalize) is batched on the GPU. The default
+path retains the original full-frame box exactly; opt-in person detection supplies
+one interpolated box per frame. Keypoints always land in original video pixels.
 """
 from __future__ import annotations
 
@@ -41,17 +39,48 @@ def run_video(
     batch_size: int = DEFAULT_BATCH_SIZE,
     coord_round: int = 2,
     conf_round: int = 3,
+    person_detection: bool = False,
+    person_detection_stride: int = 5,
+    person_box_overflow: float = 0.25,
+    person_detection_threshold: float = 0.3,
 ) -> dict:
+    if frame_stride < 1:
+        raise ValueError("frame_stride must be >= 1")
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    if person_detection_stride < 1:
+        raise ValueError("person_detection_stride must be >= 1")
+    if not 0.0 <= person_box_overflow <= 2.0:
+        raise ValueError("person_box_overflow must be between 0 and 2")
+    if not 0.0 < person_detection_threshold <= 1.0:
+        raise ValueError("person_detection_threshold must be in (0, 1]")
     t0 = time.time()
-    log(f"run_video stride={frame_stride} batch={batch_size} — fetching video...")
+    log(
+        f"run_video stride={frame_stride} batch={batch_size} "
+        f"person_detection={person_detection} — fetching video..."
+    )
     local_path, is_temp = fetch_to_local(video_url)
     log(f"video fetched in {time.time() - t0:.1f}s")
     try:
         dec = Decoder(local_path)
         pre = GpuPreprocessor(dec.height, dec.width, DEVICE, dtype=torch.bfloat16)
-        input_size = np.asarray(pre.meta["input_size"], dtype=np.float32)
-        bbox_center = np.asarray(pre.meta["bbox_center"], dtype=np.float32)
-        bbox_scale = np.asarray(pre.meta["bbox_scale"], dtype=np.float32)
+        person_boxes = None
+        person_meta = {
+            "enabled": bool(person_detection),
+            "stride": int(person_detection_stride),
+            "box_overflow": float(person_box_overflow),
+            "threshold": float(person_detection_threshold),
+        }
+        if person_detection:
+            from .person import detect_person_track
+
+            person_boxes, detection_stats = detect_person_track(
+                dec,
+                device=DEVICE,
+                detection_stride=person_detection_stride,
+                threshold=person_detection_threshold,
+            )
+            person_meta.update(detection_stats)
 
         cuda = DEVICE == "cuda"
         nbatches = (len(range(0, dec.num_frames, max(1, frame_stride))) + batch_size - 1) // batch_size
@@ -66,7 +95,14 @@ def run_video(
             t_dec += time.time() - tprev  # decode + H2D (iterator produced this batch)
 
             t = time.time()
-            x = pre(frames)  # (B,3,1024,768) bf16 on GPU (model is bf16 too)
+            batch_boxes = (
+                person_boxes[np.asarray(indices)] if person_boxes is not None else None
+            )
+            x, transform_meta = pre(
+                frames,
+                bboxes=batch_boxes,
+                bbox_overflow=person_box_overflow,
+            )  # (B,3,1024,768) bf16 on GPU (model is bf16 too)
             real = x.shape[0]
             if real < batch_size:
                 # pad last partial batch so FORWARD always sees ONE shape
@@ -91,16 +127,28 @@ def run_video(
                 cs = [MODEL.codec.decode(pn[j]) for j in range(pn.shape[0])]
                 coords = np.stack([c[0][0] for c in cs]); scores = np.stack([c[1][0] for c in cs])
             # input-space -> original pixels (vectorized), then round
-            coords = coords / input_size * bbox_scale + bbox_center - 0.5 * bbox_scale
+            input_size = transform_meta["input_size"][None, None, :]
+            bbox_center = transform_meta["bbox_center"][:, None, :]
+            bbox_scale = transform_meta["bbox_scale"][:, None, :]
+            coords = (
+                coords / input_size * bbox_scale
+                + bbox_center
+                - 0.5 * bbox_scale
+            )
             coords = np.round(coords, coord_round)
             scores = np.round(scores, conf_round)
             for j, fidx in enumerate(indices):
                 ck, sk = coords[j], scores[j]
-                frames_out.append({
+                frame_result = {
                     "frame_idx": int(fidx),
                     "keypoints": [[float(ck[k, 0]), float(ck[k, 1]), float(sk[k])]
                                   for k in range(ck.shape[0])],
-                })
+                }
+                if batch_boxes is not None:
+                    frame_result["person_bbox"] = [
+                        round(float(value), coord_round) for value in batch_boxes[j]
+                    ]
+                frames_out.append(frame_result)
             t_codec += time.time() - t
             n += len(indices)
             if bi == 0 or (bi + 1) % 10 == 0 or bi == nbatches - 1:
@@ -124,6 +172,7 @@ def run_video(
             "frame_stride": frame_stride,
             "num_source_frames": dec.num_frames,
             "num_processed_frames": n,
+            "person_detection": person_meta,
             "frames": frames_out,
         }
 
@@ -136,6 +185,7 @@ def run_video(
             "frame_stride": frame_stride,
             "num_keypoints": results["num_keypoints"],
             "model_size": os.environ.get("MODEL_SIZE", "5b"),
+            "person_detection": person_meta,
             "infer_seconds": elapsed,
             "fps_processed": round(n / elapsed, 2) if elapsed else None,
         }

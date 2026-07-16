@@ -40,7 +40,11 @@ curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
         "video_url": "https://<r2>/clip.mp4?X-Amz-…",        # presigned GET
         "result_put_url": "https://<r2>/out/kp.json?X-Amz-…", # presigned PUT (optional)
         "frame_stride": 1,
-        "batch_size": 16
+        "batch_size": 16,
+        "person_detection": true,
+        "person_detection_stride": 5,
+        "person_box_overflow": 0.25,
+        "person_detection_threshold": 0.3
   }}'
 # -> {"id": "<job-id>", "status": "IN_QUEUE"}
 
@@ -76,6 +80,10 @@ POST /infer     -> body identical to RunPod's "input" object; requires api_key
 | `result_put_url` | string | none | presigned R2 **PUT**; if omitted, keypoints are returned **inline** |
 | `frame_stride` | int | `1` | process every Nth frame (`1` = every frame) |
 | `batch_size` | int | `16` | frames per GPU batch |
+| `person_detection` | bool | `false` | use a tracked person box instead of the full frame |
+| `person_detection_stride` | int | `5` | run DETR every Nth **source** frame, then interpolate boxes |
+| `person_box_overflow` | float | `0.25` | extra detected-box width/height added on **each side** (`0.25` gives a 1.5× box before 3:4 aspect correction) |
+| `person_detection_threshold` | float | `0.3` | DETR person confidence threshold, in `(0,1]` |
 | `ping` | bool | — | if `true`, returns the build fingerprint and skips auth + model |
 
 **Credential-free by design:** the client supplies both presigned URLs, so the
@@ -92,6 +100,17 @@ container holds no R2 secrets and the same image runs anywhere.
   "frame_stride": 1,
   "num_keypoints": 308,
   "model_size": "5b",
+  "person_detection": {
+    "enabled": true,
+    "stride": 5,
+    "box_overflow": 0.25,
+    "threshold": 0.3,
+    "detection_frames": 145,
+    "person_detections": 145,
+    "selected_track_observations": 145,
+    "fallback_full_frame": false,
+    "seconds": 2.1
+  },
   "infer_seconds": 64.9,
   "fps_processed": 11.15,
   "git_sha": "…",
@@ -110,13 +129,20 @@ container holds no R2 secrets and the same image runs anywhere.
   "frame_stride": 1,
   "num_source_frames": 724,
   "num_processed_frames": 724,
+  "person_detection": { "enabled": true, "stride": 5, "box_overflow": 0.25, "threshold": 0.3, "fallback_full_frame": false },
   "frames": [
-    { "frame_idx": 0, "keypoints": [[x, y, conf], … 308 rows] },
+    {
+      "frame_idx": 0,
+      "person_bbox": [x1, y1, x2, y2],
+      "keypoints": [[x, y, conf], … 308 rows]
+    },
     …
   ]
 }
 ```
 - `keypoints[k] = [x, y, conf]` in **original video pixel coordinates**.
+- `person_bbox` is present only when detection selected a track. It is the raw
+  interpolated detector box before overflow and 3:4 aspect correction.
 - 308 = Sociopticon whole-body: body + 6 feet + 2×21 hands + dense face.
 
 ### Key body indices (compact Goliath/Sociopticon scheme)
@@ -157,6 +183,9 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
 - **Env vars:** `MODEL_SIZE` (default `5b`), `WEIGHTS_DIR` (`/weights`),
   `RUNPOD_HF_CACHE` (`/runpod-volume/huggingface-cache/hub`),
   `BATCH_SIZE` (`16`), `COMPILE` (`1`=default Inductor `torch.compile`, `0`=eager),
-  `API_KEY_SHA256`, `GIT_SHA`.
+  `PERSON_DETECTOR_MODEL` (baked path by default),
+  `PERSON_DETECTION_BATCH_SIZE` (`8`), `API_KEY_SHA256`, `GIT_SHA`.
+- If person detection finds no usable track, inference safely falls back to the
+  original full-frame transform and reports `fallback_full_frame: true`.
 - **Long videos:** pass `result_put_url` so the (potentially large) keypoint JSON
   goes to R2 instead of the HTTP response.

@@ -3,7 +3,8 @@
 Serverless keypoint detection. Send a **presigned R2 GET** for a video, get
 **presigned PUT**. Runs the Meta **Sapiens2 5B** pose model (safetensors,
 `torch.compile`, bf16) on an H100 and returns 308 Sociopticon whole-body
-keypoints. One image, thin adapters for **RunPod** and **Vast**.
+keypoints. Optional baked DETR person detection supplies a tracked top-down crop.
+One image, thin adapters for **RunPod** and **Vast**.
 
 > **API reference: [`docs/API.md`](docs/API.md)** — auth, request/response,
 > keypoint indices, curl examples. (The request/response snippets below are v1 and
@@ -37,7 +38,10 @@ Submit via RunPod `/run` (or Vast `POST /infer`):
     "result_put_url": "https://<r2>/results/abc.json?X-Amz-...",
     "frame_stride": 2,
     "batch_size": 16,
-    "include_conf": true
+    "include_conf": true,
+    "person_detection": true,
+    "person_detection_stride": 5,
+    "person_box_overflow": 0.25
 } }
 ```
 

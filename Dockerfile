@@ -1,6 +1,7 @@
 # Sapiens2 pose keypoint serverless image — PORTABLE across RunPod + Vast.
-# Weights are NOT baked (5B is 20 GB). On RunPod, configure the cached model
-# `facebook/sapiens2-pose-5b`; elsewhere the worker downloads into $WEIGHTS_DIR.
+# The 20 GB Sapiens weights are NOT baked. The much smaller person-detector
+# weights ARE baked so the optional top-down crop path never downloads at runtime.
+# On RunPod, configure the cached Sapiens model `facebook/sapiens2-pose-5b`.
 # The Inductor compile-cache is kept in $WEIGHTS_DIR. One image, two entrypoints
 # (RunPod handler / Vast FastAPI).
 #
@@ -14,6 +15,9 @@ ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_BREAK_SYSTEM_PACKAGES=
 # (running a script puts ITS dir on sys.path, not the workdir).
 ENV PYTHONPATH=/app
 ENV WEIGHTS_DIR=/weights MODEL_SIZE=5b
+ENV PERSON_DETECTOR_DIR=/opt/models/detr-resnet-101-dc5
+ENV PERSON_DETECTOR_MODEL=/opt/models/detr-resnet-101-dc5
+ENV PERSON_DETECTOR_NAME=facebook/detr-resnet-101-dc5
 
 # Auth: only the SHA-256 of the static API key is baked in (safe for a public
 # image — the key itself never touches the repo/image). Handler checks
@@ -32,6 +36,12 @@ WORKDIR /app
 # Sapiens2 (clean deps: torch/torchvision/transformers/timm — no mmcv/mmpose).
 RUN git clone --depth 1 https://github.com/facebookresearch/sapiens2.git /opt/sapiens2 \
     && pip install --no-cache-dir -e /opt/sapiens2
+
+# Pin the detector revision and save only its inference files into the image.
+# Download + cache removal happen in one layer so the final image has one copy.
+ARG PERSON_DETECTOR_REVISION=96317ca979e231bd960cb3cac31328e0165a3e94
+RUN HF_HOME=/tmp/hf-person-build python -c "from transformers import AutoImageProcessor, DetrForObjectDetection; repo='facebook/detr-resnet-101-dc5'; revision='${PERSON_DETECTOR_REVISION}'; dst='${PERSON_DETECTOR_DIR}'; AutoImageProcessor.from_pretrained(repo, revision=revision, use_fast=False).save_pretrained(dst); model=DetrForObjectDetection.from_pretrained(repo, revision=revision, use_pretrained_backbone=False); model.config.use_pretrained_backbone=False; model.save_pretrained(dst, safe_serialization=True)" \
+    && rm -rf /tmp/hf-person-build
 
 RUN pip install --no-cache-dir decord kornia requests huggingface_hub runpod fastapi uvicorn
 

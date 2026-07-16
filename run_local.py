@@ -24,6 +24,20 @@ def main():
     ap.add_argument("--put-url", help="presigned R2 PUT url for results JSON")
     ap.add_argument("--stride", type=int, default=1, help="process every Nth frame")
     ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--person-detection", action="store_true")
+    ap.add_argument(
+        "--person-detection-stride",
+        type=int,
+        default=5,
+        help="run the detector every N source frames",
+    )
+    ap.add_argument(
+        "--person-box-overflow",
+        type=float,
+        default=0.25,
+        help="fraction of box width/height added on each side",
+    )
+    ap.add_argument("--person-detection-threshold", type=float, default=0.3)
     args = ap.parse_args()
 
     if not args.out and not args.put_url:
@@ -35,6 +49,10 @@ def main():
         result_local_path=args.out,
         frame_stride=args.stride,
         batch_size=args.batch,
+        person_detection=args.person_detection,
+        person_detection_stride=args.person_detection_stride,
+        person_box_overflow=args.person_box_overflow,
+        person_detection_threshold=args.person_detection_threshold,
     )
     print(json.dumps(summary, indent=2))
 

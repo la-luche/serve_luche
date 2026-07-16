@@ -17,8 +17,6 @@ from urllib.parse import urlparse
 import requests
 import torch
 
-from .model import DEVICE
-
 
 def fetch_to_local(video_url: str, chunk: int = 1 << 20) -> tuple[str, bool]:
     """Return (local_path, is_temp). Accepts http(s) presigned URLs or a path."""
@@ -59,6 +57,10 @@ class Decoder:
         indices = list(range(0, self.num_frames, max(1, frame_stride)))
         for i in range(0, len(indices), batch_size):
             chunk = indices[i : i + batch_size]
-            arr = self._vr.get_batch(chunk).asnumpy()  # (B,H,W,C) uint8 RGB
-            frames = torch.from_numpy(arr).permute(0, 3, 1, 2).contiguous()
-            yield chunk, frames.to(device, non_blocking=True)
+            yield chunk, self.get_batch(chunk, device=device)
+
+    def get_batch(self, indices: list[int], device: str) -> torch.Tensor:
+        """Random-access RGB frames as uint8 (B,C,H,W) on ``device``."""
+        arr = self._vr.get_batch(indices).asnumpy()  # (B,H,W,C) uint8 RGB
+        frames = torch.from_numpy(arr).permute(0, 3, 1, 2).contiguous()
+        return frames.to(device, non_blocking=True)

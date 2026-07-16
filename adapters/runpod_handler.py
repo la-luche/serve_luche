@@ -25,20 +25,35 @@ def handler(event):
     if not auth.check(inp.get("api_key")):
         log("job rejected: unauthorized")
         return {"error": "unauthorized"}
-    log(f"job accepted: stride={inp.get('frame_stride', 1)} batch={inp.get('batch_size')}")
-
     video_url = inp.get("video_url")
     if not video_url:
         return {"error": "missing 'video_url' in input"}
 
-    kwargs = {
-        "result_put_url": inp.get("result_put_url"),
-        "frame_stride": int(inp.get("frame_stride", 1)),  # default: every frame
-    }
-    if inp.get("batch_size"):
-        kwargs["batch_size"] = int(inp["batch_size"])
-
     try:
+        person_detection = inp.get("person_detection", False)
+        if not isinstance(person_detection, bool):
+            raise ValueError("person_detection must be a JSON boolean")
+        kwargs = {
+            "result_put_url": inp.get("result_put_url"),
+            "frame_stride": int(inp.get("frame_stride", 1)),
+            "person_detection": person_detection,
+            "person_detection_stride": int(
+                inp.get("person_detection_stride", 5)
+            ),
+            "person_box_overflow": float(inp.get("person_box_overflow", 0.25)),
+            "person_detection_threshold": float(
+                inp.get("person_detection_threshold", 0.3)
+            ),
+        }
+        if inp.get("batch_size"):
+            kwargs["batch_size"] = int(inp["batch_size"])
+        log(
+            f"job accepted: stride={kwargs['frame_stride']} "
+            f"batch={kwargs.get('batch_size')} "
+            f"person_detection={person_detection} "
+            f"detector_stride={kwargs['person_detection_stride']} "
+            f"overflow={kwargs['person_box_overflow']}"
+        )
         from core.infer import run_video  # lazy: triggers model load on first job
 
         result = run_video(video_url, **kwargs)

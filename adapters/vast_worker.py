@@ -21,6 +21,10 @@ class InferRequest(BaseModel):
     result_put_url: str | None = None
     frame_stride: int = 1  # default: every frame
     batch_size: int | None = None
+    person_detection: bool = False
+    person_detection_stride: int = 5
+    person_box_overflow: float = 0.25
+    person_detection_threshold: float = 0.3
 
 
 @app.get("/healthz")
@@ -40,6 +44,10 @@ def infer(req: InferRequest):
             result_put_url=req.result_put_url,
             frame_stride=req.frame_stride,
             batch_size=req.batch_size or DEFAULT_BATCH_SIZE,
+            person_detection=req.person_detection,
+            person_detection_stride=req.person_detection_stride,
+            person_box_overflow=req.person_box_overflow,
+            person_detection_threshold=req.person_detection_threshold,
         )
         result["git_sha"] = os.environ.get("GIT_SHA", "unknown")
         return result
