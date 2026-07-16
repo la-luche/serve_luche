@@ -119,6 +119,21 @@ container holds no R2 secrets and the same image runs anywhere.
 - `keypoints[k] = [x, y, conf]` in **original video pixel coordinates**.
 - 308 = Sociopticon whole-body: body + 6 feet + 2×21 hands + dense face.
 
+### Key body indices (compact Goliath/Sociopticon scheme)
+This is **not COCO-17 after the elbows**. The hand roots also serve as wrists.
+
+| joint | left | right |
+|-------|------|-------|
+| shoulder | 5 | 6 |
+| elbow | 7 | 8 |
+| wrist / hand root | 62 | 41 |
+| hip | 9 | 10 |
+| knee | 11 | 12 |
+| ankle | 13 | 14 |
+
+Feet are left big toe/small toe/heel `15/16/17` and right `18/19/20`.
+Extra elbow/acromion/neck points are `63–69`; dense face points start at `70`.
+
 ### Key hand-keypoint indices (compact scheme the model outputs)
 The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … → base`.
 
