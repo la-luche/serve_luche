@@ -7,8 +7,7 @@ keypoints. Optional baked DETR person detection supplies a tracked top-down crop
 One image, thin adapters for **RunPod** and **Vast**.
 
 > **API reference: [`docs/API.md`](docs/API.md)** — auth, request/response,
-> keypoint indices, curl examples. (The request/response snippets below are v1 and
-> outdated; docs/API.md is authoritative.)
+> keypoint indices, and copy-paste curl examples.
 
 
 ## Design in one picture
@@ -30,20 +29,22 @@ same image runs anywhere.
 
 ## Request / response (async)
 
-Submit via RunPod `/run` (or Vast `POST /infer`):
+Submit via RunPod `/run`:
 
 ```json
 { "input": {
+    "api_key": "sk_luche_…",
     "video_url": "https://<r2>/video.mp4?X-Amz-...",
     "result_put_url": "https://<r2>/results/abc.json?X-Amz-...",
     "frame_stride": 2,
     "batch_size": 16,
-    "include_conf": true,
     "person_detection": true,
     "person_detection_stride": 5,
     "person_box_overflow": 0.25
 } }
 ```
+
+Vast `POST /infer` accepts the same fields without RunPod's outer `input` object.
 
 The job returns a small summary; the big keypoint array is PUT to R2:
 
@@ -59,13 +60,15 @@ keypoints are in **original video pixel coordinates**.
 
 ## Build order
 
-1. **Validate on a GPU box (do this before containerizing):** rent one H100
-   (Vast/RunPod pod), `pip install -r requirements.txt`, then
-   `python run_local.py --video "$GET_URL" --put-url "$PUT_URL" --stride 2`.
-   Confirm keypoints look sane and read the real per-video time.
-2. **Image:** push to GitHub → the `build-and-push` workflow builds amd64 and
-   pushes to `ghcr.io/<owner>/serve_luche`. No Hugging Face build secret is needed.
-3. **Deploy** the same image to both platforms (below).
+1. **Image:** push to GitHub. The workflow builds amd64, reloads the baked DETR
+   fully offline, runs tracking and Sapiens affine tests inside the image, and
+   pushes only the immutable commit-SHA tag to GHCR.
+2. **CPU/API smoke:** verify the immutable SHA image starts and reports its build
+   fingerprint. `requirements.txt` is only a local convenience list; the pinned
+   Docker base, Sapiens code/checkpoint revisions, and complete production
+   `constraints.txt` define production.
+3. **GPU canary:** deploy the immutable SHA tag, ping it, then run a real clip
+   before updating normal callers. Never deploy `latest` to RunPod.
 
 ## Deploy
 
@@ -76,7 +79,8 @@ The loader resolves that mount automatically. Keep the default container command
 (`python -u adapters/runpod_handler.py`), choose H100 80 GB, enable FlashBoot,
 set execution timeout and job TTL to 24 hours, and use one active worker while
 you need predictable latency. Set active workers back to zero when cost matters
-more than cold-start latency.
+more than cold-start latency. Set the template image to an immutable
+`ghcr.io/la-luche/serve_luche:<40-character-git-sha>` tag.
 
 **Vast:** create a workergroup from the same image with the start command
 overridden to `python adapters/vast_worker.py`, expose `$PORT`, and point the

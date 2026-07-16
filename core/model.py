@@ -23,6 +23,9 @@ MODEL_SIZE = os.environ.get("MODEL_SIZE", "5b")           # 0.4b/0.8b/1b/5b
 WEIGHTS_DIR = os.environ.get("WEIGHTS_DIR", "/weights")
 HF_REPO = f"facebook/sapiens2-pose-{MODEL_SIZE}"
 CKPT_NAME = f"sapiens2_{MODEL_SIZE}_pose.safetensors"
+SAPIENS_MODEL_REVISION = os.environ.get(
+    "SAPIENS_MODEL_REVISION", "ada1f29aa1fd454ca28665c700923a0101b6b24f"
+)
 RUNPOD_HF_CACHE = os.environ.get(
     "RUNPOD_HF_CACHE", "/runpod-volume/huggingface-cache/hub"
 )
@@ -49,28 +52,14 @@ def _find_config() -> str:
 
 
 def _runpod_cached_checkpoint() -> str | None:
-    """Resolve a RunPod cached-model snapshot without copying the checkpoint.
-
-    RunPod follows Hugging Face's cache layout. Prefer the revision referenced by
-    ``refs/main`` and fall back to any complete snapshot, which also handles a
-    cache prepared without that ref file.
-    """
+    """Resolve only the pinned RunPod cached-model snapshot."""
     repo_dir = os.path.join(
         RUNPOD_HF_CACHE, f"models--{HF_REPO.replace('/', '--')}"
     )
-    ref_path = os.path.join(repo_dir, "refs", "main")
-    try:
-        with open(ref_path, encoding="utf-8") as f:
-            revision = f.read().strip()
-        candidate = os.path.join(repo_dir, "snapshots", revision, CKPT_NAME)
-        if revision and os.path.isfile(candidate):
-            return candidate
-    except OSError:
-        pass
-
-    snapshots = glob.glob(os.path.join(repo_dir, "snapshots", "*", CKPT_NAME))
-    complete = [path for path in snapshots if os.path.isfile(path)]
-    return max(complete, key=os.path.getmtime) if complete else None
+    candidate = os.path.join(
+        repo_dir, "snapshots", SAPIENS_MODEL_REVISION, CKPT_NAME
+    )
+    return candidate if os.path.isfile(candidate) else None
 
 
 def _ensure_checkpoint() -> str:
@@ -80,18 +69,19 @@ def _ensure_checkpoint() -> str:
         log(f"RunPod cached checkpoint present ({gb:.1f} GB) at {cached}")
         return cached
 
-    path = os.path.join(WEIGHTS_DIR, CKPT_NAME)
-    if os.path.isfile(path):
-        gb = os.path.getsize(path) / 1e9
-        log(f"checkpoint present ({gb:.1f} GB) at {path} — no download")
-        return path
     os.makedirs(WEIGHTS_DIR, exist_ok=True)
     from huggingface_hub import hf_hub_download
 
-    log(f"downloading {CKPT_NAME} from {HF_REPO} -> {WEIGHTS_DIR} (20 GB for 5b)...")
+    log(
+        f"resolving {CKPT_NAME} from {HF_REPO}@{SAPIENS_MODEL_REVISION} "
+        f"-> {WEIGHTS_DIR} (20 GB for 5b)..."
+    )
     t = time.time()
     src = hf_hub_download(
-        repo_id=HF_REPO, filename=CKPT_NAME, local_dir=WEIGHTS_DIR,
+        repo_id=HF_REPO,
+        filename=CKPT_NAME,
+        revision=SAPIENS_MODEL_REVISION,
+        local_dir=WEIGHTS_DIR,
         token=os.environ.get("HF_TOKEN"),
     )
     log(f"checkpoint downloaded in {time.time() - t:.1f}s")

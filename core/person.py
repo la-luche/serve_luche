@@ -147,15 +147,15 @@ def _track_score(
     span = (
         track.observations[-1].frame_idx - track.observations[0].frame_idx + 1
     )
-    # Persistence dominates; center/area reject partial edge bystanders, while a
-    # capped motion bonus helps select the patient in walking clips.
+    # Persistence matters, but must not let a stationary edge clinician beat a
+    # central moving patient who is briefly missed by the detector.
     return (
-        4.0 * coverage
-        + min(span / max(frame_span, 1), 1.0)
+        1.5 * coverage
+        + 0.5 * min(span / max(frame_span, 1), 1.0)
         + float(scores.mean())
-        + float(np.sqrt(np.clip(areas.mean(), 0.0, 1.0)))
-        + float(centrality.mean())
-        + min(motion, 1.0)
+        + 2.0 * float(np.sqrt(np.clip(areas.mean(), 0.0, 1.0)))
+        + 3.0 * float(centrality.mean())
+        + min(5.0 * motion, 1.0)
     )
 
 
@@ -196,16 +196,27 @@ def interpolate_track(track: _Track, num_frames: int) -> np.ndarray:
     centers = np.stack([_box_center(box) for box in boxes])
     sizes = np.maximum(boxes[:, 2:4] - boxes[:, 0:2], 2.0)
 
-    # A symmetric three-point filter removes detector jitter without temporal lag.
+    # A symmetric three-point filter removes jitter without temporal lag. Split
+    # neighbor weight by inverse time distance so a detection 15 frames away
+    # cannot pull as hard as one 5 frames away.
     if len(observations) >= 3:
+        previous_dt = np.maximum(source[1:-1] - source[:-2], 1).astype(float)
+        next_dt = np.maximum(source[2:] - source[1:-1], 1).astype(float)
+        previous_inverse = 1.0 / previous_dt
+        next_inverse = 1.0 / next_dt
+        neighbor_total = previous_inverse + next_inverse
+        previous_weight = 0.5 * previous_inverse / neighbor_total
+        next_weight = 0.5 * next_inverse / neighbor_total
         centers[1:-1] = (
-            0.25 * centers[:-2] + 0.5 * centers[1:-1] + 0.25 * centers[2:]
+            previous_weight[:, None] * centers[:-2]
+            + 0.5 * centers[1:-1]
+            + next_weight[:, None] * centers[2:]
         )
         log_sizes = np.log(sizes)
         log_sizes[1:-1] = (
-            0.25 * log_sizes[:-2]
+            previous_weight[:, None] * log_sizes[:-2]
             + 0.5 * log_sizes[1:-1]
-            + 0.25 * log_sizes[2:]
+            + next_weight[:, None] * log_sizes[2:]
         )
     else:
         log_sizes = np.log(sizes)
@@ -223,6 +234,31 @@ def interpolate_track(track: _Track, num_frames: int) -> np.ndarray:
         [center_series - 0.5 * size_series, center_series + 0.5 * size_series],
         axis=1,
     ).astype(np.float32)
+
+
+def interpolate_supported_track(
+    track: _Track | None,
+    *,
+    num_frames: int,
+    detection_stride: int,
+) -> np.ndarray | None:
+    """Interpolate only where a track has temporal support.
+
+    A single low-confidence false positive must not become a crop for the whole
+    clip. Two observations are the minimum usable track. Outside the observed
+    span we allow one detector interval of extrapolation, then mark frames NaN;
+    preprocessing interprets those rows as explicit full-frame fallback.
+    """
+    if track is None or len(track.observations) < 2:
+        return None
+    boxes = interpolate_track(track, num_frames)
+    supported_start = max(0, track.observations[0].frame_idx - detection_stride)
+    supported_end = min(
+        num_frames - 1, track.observations[-1].frame_idx + detection_stride
+    )
+    boxes[:supported_start] = np.nan
+    boxes[supported_end + 1 :] = np.nan
+    return boxes
 
 
 class PersonDetector:
@@ -313,9 +349,9 @@ def detect_person_track(
     indices = list(range(0, decoder.num_frames, detection_stride))
     if indices[-1] != decoder.num_frames - 1:
         indices.append(decoder.num_frames - 1)
-    detector = _get_detector(device)
     samples: list[tuple[int, list[tuple[np.ndarray, float]]]] = []
     started = time.time()
+    detector = _get_detector(device)
     detection_count = 0
     for start in range(0, len(indices), batch_size):
         chunk = indices[start : start + batch_size]
@@ -332,11 +368,22 @@ def detect_person_track(
         detection_stride=detection_stride,
     )
     elapsed = time.time() - started
+    boxes = interpolate_supported_track(
+        track,
+        num_frames=decoder.num_frames,
+        detection_stride=detection_stride,
+    )
+    fallback_frames = (
+        decoder.num_frames
+        if boxes is None
+        else int((~np.isfinite(boxes).all(axis=1)).sum())
+    )
     stats = {
         "detection_frames": len(indices),
         "person_detections": detection_count,
         "selected_track_observations": len(track.observations) if track else 0,
-        "fallback_full_frame": track is None,
+        "fallback_full_frame": boxes is None,
+        "full_frame_fallback_frames": fallback_frames,
         "seconds": round(elapsed, 2),
     }
     log(
@@ -344,4 +391,4 @@ def detect_person_track(
         f"frames={len(indices)} detections={detection_count} "
         f"track={stats['selected_track_observations']} time={elapsed:.1f}s"
     )
-    return (interpolate_track(track, decoder.num_frames) if track else None), stats
+    return boxes, stats

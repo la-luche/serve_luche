@@ -8,13 +8,14 @@
 # runtime base (not devel) keeps the image ~10 GB so it builds on a free GH runner.
 # torch.compile only needs a C++ compiler (g++) + Triton, not nvcc — so we add
 # build-essential and skip the multi-GB CUDA toolkit.
-FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-runtime
+FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-runtime@sha256:72f863fa1fe13d5d87a72d00db2c85fb2d43409ee08dd26bc469de4c8a28b427
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_BREAK_SYSTEM_PACKAGES=1
 # /app on the path so `import core` resolves when CMD runs adapters/*.py
 # (running a script puts ITS dir on sys.path, not the workdir).
 ENV PYTHONPATH=/app
 ENV WEIGHTS_DIR=/weights MODEL_SIZE=5b
+ENV SAPIENS_MODEL_REVISION=ada1f29aa1fd454ca28665c700923a0101b6b24f
 ENV PERSON_DETECTOR_DIR=/opt/models/detr-resnet-101-dc5
 ENV PERSON_DETECTOR_MODEL=/opt/models/detr-resnet-101-dc5
 ENV PERSON_DETECTOR_NAME=facebook/detr-resnet-101-dc5
@@ -33,21 +34,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+COPY constraints.txt /tmp/constraints.txt
+
 # Sapiens2 (clean deps: torch/torchvision/transformers/timm — no mmcv/mmpose).
-RUN git clone --depth 1 https://github.com/facebookresearch/sapiens2.git /opt/sapiens2 \
-    && pip install --no-cache-dir -e /opt/sapiens2
+# Fetch the exact commit rather than allowing upstream HEAD to change this image.
+ARG SAPIENS2_REVISION=7e5bae88456ac418ff0e58e74106c9fe192055d4
+RUN git init /opt/sapiens2 \
+    && git -C /opt/sapiens2 remote add origin https://github.com/facebookresearch/sapiens2.git \
+    && git -C /opt/sapiens2 fetch --depth 1 origin ${SAPIENS2_REVISION} \
+    && git -C /opt/sapiens2 checkout --detach FETCH_HEAD \
+    && pip install --no-cache-dir --constraint /tmp/constraints.txt -e /opt/sapiens2
 
 # Pin the detector revision and save only its inference files into the image.
 # Download + cache removal happen in one layer so the final image has one copy.
 ARG PERSON_DETECTOR_REVISION=96317ca979e231bd960cb3cac31328e0165a3e94
-RUN HF_HOME=/tmp/hf-person-build python -c "from transformers import AutoConfig, AutoImageProcessor, DetrForObjectDetection; repo='facebook/detr-resnet-101-dc5'; revision='${PERSON_DETECTOR_REVISION}'; dst='${PERSON_DETECTOR_DIR}'; AutoImageProcessor.from_pretrained(repo, revision=revision, use_fast=False).save_pretrained(dst); config=AutoConfig.from_pretrained(repo, revision=revision); config.use_pretrained_backbone=False; model=DetrForObjectDetection.from_pretrained(repo, revision=revision, config=config); model.save_pretrained(dst, safe_serialization=True)" \
-    && rm -rf /tmp/hf-person-build
+ENV PERSON_DETECTOR_REVISION=${PERSON_DETECTOR_REVISION}
+RUN HF_HOME=/tmp/hf-person-build python -c "from huggingface_hub import hf_hub_download; repo='facebook/detr-resnet-101-dc5'; revision='${PERSON_DETECTOR_REVISION}'; dst='${PERSON_DETECTOR_DIR}'; [hf_hub_download(repo_id=repo, filename=name, revision=revision, local_dir=dst) for name in ('config.json','preprocessor_config.json','model.safetensors')]" \
+    && HF_HUB_OFFLINE=1 python -c "from transformers import AutoConfig, AutoImageProcessor, DetrForObjectDetection; dst='${PERSON_DETECTOR_DIR}'; processor=AutoImageProcessor.from_pretrained(dst, local_files_only=True, use_fast=False); config=AutoConfig.from_pretrained(dst, local_files_only=True); config.use_pretrained_backbone=False; model=DetrForObjectDetection.from_pretrained(dst, local_files_only=True, config=config); assert model.config.id2label[1].lower() == 'person'" \
+    && rm -rf /tmp/hf-person-build ${PERSON_DETECTOR_DIR}/.cache
 
-RUN pip install --no-cache-dir decord kornia requests huggingface_hub runpod fastapi uvicorn
+RUN pip install --constraint /tmp/constraints.txt --no-cache-dir \
+        decord kornia requests huggingface_hub runpod fastapi uvicorn
 
 COPY core/ /app/core/
 COPY adapters/ /app/adapters/
+COPY tests/ /app/tests/
 COPY run_local.py /app/
+
+# Pure tracking tests plus mandatory Sapiens-backed affine/fallback geometry tests.
+# REQUIRE_SAPIENS_TESTS makes a missing/broken production import fail the build.
+RUN REQUIRE_SAPIENS_TESTS=1 python -m unittest discover -s /app/tests -v
 
 # Default entrypoint = RunPod. Vast overrides CMD -> python adapters/vast_worker.py
 CMD ["python", "-u", "adapters/runpod_handler.py"]

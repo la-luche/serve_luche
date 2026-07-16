@@ -1,12 +1,14 @@
-# Pinned for reproducible serverless images. torch/torchcodec must be a
-# compatible pair AND match the CUDA in the base image (see Dockerfile).
-# NOTE: RTX 5080 (Blackwell / sm_120) needs torch >= 2.7 + CUDA 12.8 — the pins
-# below target datacenter GPUs (H100/A100). Bump both for a Blackwell build.
-torch==2.4.0
-decord>=0.6.0
+# Local convenience dependencies only. Production is defined by the pinned
+# Docker base/Sapiens commit plus constraints.txt. Install a torch/torchvision
+# pair appropriate for the local GPU first; Sapiens2 requires torch >= 2.7.
+-c constraints.txt
+decord==0.6.0
 numpy>=1.24
 requests>=2.31
-huggingface_hub>=0.24
+huggingface_hub
+transformers
+timm
+kornia
 
 # serverless adapters
 runpod>=1.6

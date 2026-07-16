@@ -39,6 +39,7 @@ class GpuPreprocessor:
         center, scale = bbox_xyxy2cs(bbox, padding=1.25)
         scale = _fix_aspect(scale, INPUT_W / INPUT_H)
         M = get_udp_warp_matrix(center, scale, 0.0, (INPUT_W, INPUT_H))  # (2,3)
+        self.full_matrix = np.asarray(M, dtype=np.float32)
         self.full_M = torch.as_tensor(M, dtype=torch.float32, device=device)[None]
         self.full_center = np.asarray(center, dtype=np.float32)
         self.full_scale = np.asarray(scale, dtype=np.float32)
@@ -46,6 +47,57 @@ class GpuPreprocessor:
         self.std = torch.tensor(STD, device=device).view(1, 3, 1, 1)
         self.device = device
         self.dtype = dtype
+
+    def geometry(
+        self,
+        batch_size: int,
+        bboxes: np.ndarray | None = None,
+        bbox_overflow: float = 0.0,
+    ) -> tuple[torch.Tensor, dict]:
+        """Return per-frame UDP matrices and their inverse-map metadata."""
+        if bboxes is None:
+            M = self.full_M.expand(batch_size, -1, -1)
+            centers = np.repeat(self.full_center[None], batch_size, axis=0)
+            scales = np.repeat(self.full_scale[None], batch_size, axis=0)
+        else:
+            if len(bboxes) != batch_size:
+                raise ValueError(
+                    f"got {len(bboxes)} boxes for {batch_size} input frames"
+                )
+            centers_list, scales_list, matrices = [], [], []
+            # overflow is the fraction added on EACH side: 0.25 -> 1.5x box.
+            padding = 1.0 + 2.0 * bbox_overflow
+            for bbox in np.asarray(bboxes, dtype=np.float32):
+                valid = (
+                    np.isfinite(bbox).all()
+                    and bbox[2] > bbox[0]
+                    and bbox[3] > bbox[1]
+                )
+                if valid:
+                    center, scale = bbox_xyxy2cs(bbox, padding=padding)
+                    scale = _fix_aspect(scale, INPUT_W / INPUT_H)
+                    matrix = get_udp_warp_matrix(
+                        center, scale, 0.0, (INPUT_W, INPUT_H)
+                    )
+                else:
+                    center, scale, matrix = (
+                        self.full_center,
+                        self.full_scale,
+                        self.full_matrix,
+                    )
+                centers_list.append(center)
+                scales_list.append(scale)
+                matrices.append(matrix)
+            centers = np.asarray(centers_list, dtype=np.float32)
+            scales = np.asarray(scales_list, dtype=np.float32)
+            M = torch.as_tensor(
+                np.asarray(matrices), dtype=torch.float32, device=self.device
+            )
+        return M, {
+            "input_size": np.asarray((INPUT_W, INPUT_H), dtype=np.float32),
+            "bbox_center": centers,
+            "bbox_scale": scales,
+        }
 
     @torch.inference_mode()
     def __call__(
@@ -56,38 +108,8 @@ class GpuPreprocessor:
     ) -> tuple[torch.Tensor, dict]:
         # frames: (B,3,H,W) uint8 RGB on device
         x = frames.float()
-        if bboxes is None:
-            M = self.full_M.expand(x.shape[0], -1, -1)
-            centers = np.repeat(self.full_center[None], x.shape[0], axis=0)
-            scales = np.repeat(self.full_scale[None], x.shape[0], axis=0)
-        else:
-            if len(bboxes) != x.shape[0]:
-                raise ValueError(
-                    f"got {len(bboxes)} boxes for {x.shape[0]} input frames"
-                )
-            centers_list, scales_list, matrices = [], [], []
-            # overflow is the fraction added on EACH side: 0.25 -> 1.5x box.
-            padding = 1.0 + 2.0 * bbox_overflow
-            for bbox in np.asarray(bboxes, dtype=np.float32):
-                center, scale = bbox_xyxy2cs(bbox, padding=padding)
-                scale = _fix_aspect(scale, INPUT_W / INPUT_H)
-                centers_list.append(center)
-                scales_list.append(scale)
-                matrices.append(
-                    get_udp_warp_matrix(
-                        center, scale, 0.0, (INPUT_W, INPUT_H)
-                    )
-                )
-            centers = np.asarray(centers_list, dtype=np.float32)
-            scales = np.asarray(scales_list, dtype=np.float32)
-            M = torch.as_tensor(
-                np.asarray(matrices), dtype=torch.float32, device=self.device
-            )
+        M, meta = self.geometry(x.shape[0], bboxes, bbox_overflow)
         # align_corners=True to match cv2.warpAffine (validated: mean diff 0.08/255)
         x = warp_affine(x, M, (INPUT_H, INPUT_W), mode="bilinear", align_corners=True)
         normalized = ((x - self.mean) / self.std).to(self.dtype)
-        return normalized, {
-            "input_size": np.asarray((INPUT_W, INPUT_H), dtype=np.float32),
-            "bbox_center": centers,
-            "bbox_scale": scales,
-        }
+        return normalized, meta

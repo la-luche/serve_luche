@@ -37,8 +37,8 @@ curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
   -H "Content-Type: application/json" \
   -d '{"input": {
         "api_key": "sk_luche_…",
-        "video_url": "https://<r2>/clip.mp4?X-Amz-…",        # presigned GET
-        "result_put_url": "https://<r2>/out/kp.json?X-Amz-…", # presigned PUT (optional)
+        "video_url": "https://<r2>/clip.mp4?X-Amz-…",
+        "result_put_url": "https://<r2>/out/kp.json?X-Amz-…",
         "frame_stride": 1,
         "batch_size": 16,
         "person_detection": true,
@@ -59,14 +59,17 @@ Use this to confirm which build a container is running:
 curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
   -H "Authorization: Bearer $RUNPOD_API_KEY" -H "Content-Type: application/json" \
   -d '{"input": {"ping": true}}'
-# -> {"status":"ok","git_sha":"<40-hex>","api_key_sha256":"88edc437…","model_size":"5b"}
+# -> {"status":"ok","git_sha":"<40-hex>","model_size":"5b",
+#     "sapiens_model_revision":"<40-hex>",
+#     "person_detector":"facebook/detr-resnet-101-dc5",
+#     "person_detector_revision":"<40-hex>"}
 ```
 
 ## Vast (or any HTTP host running `adapters/vast_worker.py`)
 
 ```
 GET  /healthz   -> {"status":"ok","git_sha":…,"api_key_sha256":…,"model_size":…}   (unauth)
-POST /infer     -> body identical to RunPod's "input" object; requires api_key
+POST /infer     -> JSON body containing the fields inside RunPod's `input` object
 ```
 
 ---
@@ -100,6 +103,7 @@ container holds no R2 secrets and the same image runs anywhere.
   "frame_stride": 1,
   "num_keypoints": 308,
   "model_size": "5b",
+  "sapiens_model_revision": "<40-hex>",
   "person_detection": {
     "enabled": true,
     "stride": 5,
@@ -124,6 +128,11 @@ container holds no R2 secrets and the same image runs anywhere.
 ```json
 {
   "keypoint_format": "sapiens2_keypoints308",
+  "git_sha": "<40-hex>",
+  "model_size": "5b",
+  "sapiens_model_revision": "<40-hex>",
+  "person_detector": "facebook/detr-resnet-101-dc5",
+  "person_detector_revision": "<40-hex>",
   "num_keypoints": 308,
   "source_fps": 24.0,
   "frame_stride": 1,
@@ -141,8 +150,9 @@ container holds no R2 secrets and the same image runs anywhere.
 }
 ```
 - `keypoints[k] = [x, y, conf]` in **original video pixel coordinates**.
-- `person_bbox` is present only when detection selected a track. It is the raw
-  interpolated detector box before overflow and 3:4 aspect correction.
+- `person_bbox` is present only on frames supported by the selected track. It is
+  the raw interpolated detector box before overflow and 3:4 aspect correction.
+  Frames outside that span use the original full-frame transform and omit it.
 - 308 = Sociopticon whole-body: body + 6 feet + 2×21 hands + dense face.
 
 ### Key body indices (compact Goliath/Sociopticon scheme)
@@ -183,7 +193,9 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
 - **Env vars:** `MODEL_SIZE` (default `5b`), `WEIGHTS_DIR` (`/weights`),
   `RUNPOD_HF_CACHE` (`/runpod-volume/huggingface-cache/hub`),
   `BATCH_SIZE` (`16`), `COMPILE` (`1`=default Inductor `torch.compile`, `0`=eager),
+  `SAPIENS_MODEL_REVISION` (pinned pose-checkpoint commit),
   `PERSON_DETECTOR_MODEL` (baked path by default),
+  `PERSON_DETECTOR_REVISION` (baked checkpoint commit),
   `PERSON_DETECTION_BATCH_SIZE` (`8`), `API_KEY_SHA256`, `GIT_SHA`.
 - If person detection finds no usable track, inference safely falls back to the
   original full-frame transform and reports `fallback_full_frame: true`.

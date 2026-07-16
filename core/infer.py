@@ -72,15 +72,33 @@ def run_video(
             "threshold": float(person_detection_threshold),
         }
         if person_detection:
-            from .person import detect_person_track
+            try:
+                from .person import detect_person_track
 
-            person_boxes, detection_stats = detect_person_track(
-                dec,
-                device=DEVICE,
-                detection_stride=person_detection_stride,
-                threshold=person_detection_threshold,
-            )
-            person_meta.update(detection_stats)
+                person_boxes, detection_stats = detect_person_track(
+                    dec,
+                    device=DEVICE,
+                    detection_stride=person_detection_stride,
+                    threshold=person_detection_threshold,
+                )
+                person_meta.update(detection_stats)
+            except Exception as exc:
+                # Detection is an optional preprocessing enhancement. Preserve
+                # the established full-frame pose path and make degradation
+                # explicit in durable result metadata.
+                log(
+                    "person detection failed; using full frame: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                if DEVICE == "cuda":
+                    torch.cuda.empty_cache()
+                person_meta.update(
+                    {
+                        "fallback_full_frame": True,
+                        "full_frame_fallback_frames": dec.num_frames,
+                        "fallback_reason": type(exc).__name__,
+                    }
+                )
 
         cuda = DEVICE == "cuda"
         nbatches = (len(range(0, dec.num_frames, max(1, frame_stride))) + batch_size - 1) // batch_size
@@ -144,7 +162,7 @@ def run_video(
                     "keypoints": [[float(ck[k, 0]), float(ck[k, 1]), float(sk[k])]
                                   for k in range(ck.shape[0])],
                 }
-                if batch_boxes is not None:
+                if batch_boxes is not None and np.isfinite(batch_boxes[j]).all():
                     frame_result["person_bbox"] = [
                         round(float(value), coord_round) for value in batch_boxes[j]
                     ]
@@ -167,6 +185,17 @@ def run_video(
 
         results = {
             "keypoint_format": KEYPOINT_FORMAT,
+            "git_sha": os.environ.get("GIT_SHA", "unknown"),
+            "model_size": os.environ.get("MODEL_SIZE", "5b"),
+            "sapiens_model_revision": os.environ.get(
+                "SAPIENS_MODEL_REVISION", "unknown"
+            ),
+            "person_detector": os.environ.get(
+                "PERSON_DETECTOR_NAME", "facebook/detr-resnet-101-dc5"
+            ),
+            "person_detector_revision": os.environ.get(
+                "PERSON_DETECTOR_REVISION", "unknown"
+            ),
             "num_keypoints": len(frames_out[0]["keypoints"]) if frames_out else 0,
             "source_fps": dec.fps,
             "frame_stride": frame_stride,
@@ -185,6 +214,16 @@ def run_video(
             "frame_stride": frame_stride,
             "num_keypoints": results["num_keypoints"],
             "model_size": os.environ.get("MODEL_SIZE", "5b"),
+            "sapiens_model_revision": os.environ.get(
+                "SAPIENS_MODEL_REVISION", "unknown"
+            ),
+            "git_sha": os.environ.get("GIT_SHA", "unknown"),
+            "person_detector": os.environ.get(
+                "PERSON_DETECTOR_NAME", "facebook/detr-resnet-101-dc5"
+            ),
+            "person_detector_revision": os.environ.get(
+                "PERSON_DETECTOR_REVISION", "unknown"
+            ),
             "person_detection": person_meta,
             "infer_seconds": elapsed,
             "fps_processed": round(n / elapsed, 2) if elapsed else None,

@@ -14,10 +14,16 @@ import runpod
 
 from core import auth
 from core.log import log
+from core.request import parse_infer_input
 
 
 def handler(event):
-    inp = event.get("input") or {}
+    inp = event.get("input") if isinstance(event, dict) else None
+    if not isinstance(inp, dict):
+        return {
+            "error": "invalid input: input must be a JSON object",
+            "git_sha": os.environ.get("GIT_SHA"),
+        }
 
     if inp.get("ping"):
         return auth.version()
@@ -25,42 +31,29 @@ def handler(event):
     if not auth.check(inp.get("api_key")):
         log("job rejected: unauthorized")
         return {"error": "unauthorized"}
-    video_url = inp.get("video_url")
-    if not video_url:
-        return {"error": "missing 'video_url' in input"}
-
     try:
-        person_detection = inp.get("person_detection", False)
-        if not isinstance(person_detection, bool):
-            raise ValueError("person_detection must be a JSON boolean")
-        kwargs = {
-            "result_put_url": inp.get("result_put_url"),
-            "frame_stride": int(inp.get("frame_stride", 1)),
-            "person_detection": person_detection,
-            "person_detection_stride": int(
-                inp.get("person_detection_stride", 5)
-            ),
-            "person_box_overflow": float(inp.get("person_box_overflow", 0.25)),
-            "person_detection_threshold": float(
-                inp.get("person_detection_threshold", 0.3)
-            ),
-        }
-        if inp.get("batch_size"):
-            kwargs["batch_size"] = int(inp["batch_size"])
+        video_url, kwargs = parse_infer_input(inp)
         log(
             f"job accepted: stride={kwargs['frame_stride']} "
             f"batch={kwargs.get('batch_size')} "
-            f"person_detection={person_detection} "
+            f"person_detection={kwargs['person_detection']} "
             f"detector_stride={kwargs['person_detection_stride']} "
             f"overflow={kwargs['person_box_overflow']}"
         )
-        from core.infer import run_video  # lazy: triggers model load on first job
+    except (TypeError, ValueError) as exc:
+        return {
+            "error": f"invalid input: {exc}",
+            "git_sha": os.environ.get("GIT_SHA"),
+        }
 
-        result = run_video(video_url, **kwargs)
-        result["git_sha"] = os.environ.get("GIT_SHA", "unknown")
-        return result
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}", "git_sha": os.environ.get("GIT_SHA")}
+    # Let operational model/download/GPU failures escape so RunPod marks the
+    # job FAILED and applies its normal retry/metrics semantics. Optional DETR
+    # failures are handled explicitly inside run_video as full-frame fallback.
+    from core.infer import run_video  # lazy: triggers model load on first job
+
+    result = run_video(video_url, **kwargs)
+    result["git_sha"] = os.environ.get("GIT_SHA", "unknown")
+    return result
 
 
 runpod.serverless.start({"handler": handler})
