@@ -5,7 +5,7 @@ URL), get **308 Sapiens2 keypoints per frame** back — either inline (small cli
 or written to R2 (presigned PUT). Same image runs on **RunPod** and **Vast**.
 
 - **Live RunPod endpoint:** `v29lgubwpc998d`
-- **Image:** `ghcr.io/skovorp/serve_luche` (public)
+- **Image:** `ghcr.io/la-luche/serve_luche` (public)
 - **Model:** Sapiens2-pose-5b, 308-keypoint Sociopticon (body + feet + hands + face)
 
 ---

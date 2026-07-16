@@ -3,7 +3,7 @@ name: build-and-push
 # Builds the portable Sapiens2 image (amd64) and pushes to GHCR. Weights are NOT
 # baked: RunPod supplies its cached model mount and other platforms can fetch at
 # runtime. The build therefore needs no HF token. GITHUB_TOKEN (auto) pushes to
-# ghcr.io/skovorp/serve_luche.
+# ghcr.io/la-luche/serve_luche.
 
 on:
   push:
@@ -43,7 +43,7 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
           tags: |
-            ghcr.io/skovorp/serve_luche:latest
-            ghcr.io/skovorp/serve_luche:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/serve_luche:latest
+            ghcr.io/${{ github.repository_owner }}/serve_luche:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
