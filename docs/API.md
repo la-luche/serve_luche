@@ -1,8 +1,9 @@
 # serve_luche API
 
-Serverless whole-body keypoint detection. Send a video (as a presigned R2 GET
+Whole-body keypoint detection. Send a video (as a presigned R2 GET
 URL), get **308 Sapiens2 keypoints per frame** back — either inline (small clips)
-or written to R2 (presigned PUT). Same image runs on **RunPod** and **Vast**.
+or written to R2 (presigned PUT). Same image runs on **RunPod**, a normal Vast
+instance, and the lab RTX 5080.
 
 - **Live RunPod endpoint:** `v29lgubwpc998d`
 - **Image:** `ghcr.io/la-luche/serve_luche` (public)
@@ -21,7 +22,7 @@ handler compares `sha256(request.api_key)` against the baked hash (constant-time
   `Authorization: Bearer` header (that's RunPod's own gate); `api_key` in the body
   is *our* app gate.
 
-Current key hash (baked): `88edc437185f02bf774f458a8f3e3404d6b9e49c89ceb3393a31cd5579f9d446`
+Current key hash (baked): `1e058a1a665275a66f1aac6778c8525de451a42c0e9519b84f8802c3452106a5`
 (the key is held out-of-band; rotate by regenerating and rebuilding the image.)
 
 ---
@@ -65,12 +66,21 @@ curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
 #     "person_detector_revision":"<40-hex>"}
 ```
 
-## Vast (or any HTTP host running `adapters/vast_worker.py`)
+## Dedicated GPU (Vast or lab machine)
 
 ```
-GET  /healthz   -> {"status":"ok","git_sha":…,"api_key_sha256":…,"model_size":…}   (unauth)
-POST /infer     -> JSON body containing the fields inside RunPod's `input` object
+GET  /healthz          -> fingerprint + busy/queue state (unauthenticated)
+POST /run              -> enqueue the same {"input": {...}} body as RunPod
+GET  /status/<job-id>   -> IN_QUEUE / IN_PROGRESS / COMPLETED / FAILED / CANCELLED
+POST /cancel/<job-id>   -> cooperative cancellation between GPU batches
+POST /runsync           -> synchronous RunPod-shaped body
+POST /infer             -> synchronous flat body
 ```
+
+Run `python -u adapters/http_worker.py`. Job status survives process restarts;
+active jobs become `FAILED` after a restart so callers can retry instead of
+polling a vanished request forever. API keys and presigned URLs are never
+persisted.
 
 ---
 
@@ -186,6 +196,9 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
 
 - **Warm throughput (H100, 5B, compiled):** ~11 fps → a 30 s / 724-frame clip in
   ~65 s. Eager (no compile) ~8.6 fps.
+- **Warm throughput (RTX 5080, 5B, compiled, batch 1):** ~2.6 fps with 9.84 GiB
+  peak VRAM. A 146-frame canary took 65.2 s including an 8.7 s cached first
+  forward after process restart.
 - **Cold start** (fresh worker): image pull + model initialization + first-forward
   compilation can still take minutes. On RunPod, configure the endpoint Model as
   `facebook/sapiens2-pose-5b` to avoid downloading the 20 GB checkpoint in the
@@ -193,6 +206,8 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
 - **Env vars:** `MODEL_SIZE` (default `5b`), `WEIGHTS_DIR` (`/weights`),
   `RUNPOD_HF_CACHE` (`/runpod-volume/huggingface-cache/hub`),
   `BATCH_SIZE` (`16`), `COMPILE` (`1`=default Inductor `torch.compile`, `0`=eager),
+  `MODEL_LOAD_DEVICE` (`cpu` is required for 5B on a 16 GB RTX 5080),
+  `JOB_STATE_DIR` (persistent dedicated-worker status directory),
   `SAPIENS_MODEL_REVISION` (pinned pose-checkpoint commit),
   `PERSON_DETECTOR_MODEL` (baked path by default),
   `PERSON_DETECTOR_REVISION` (baked checkpoint commit),

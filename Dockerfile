@@ -1,9 +1,9 @@
-# Sapiens2 pose keypoint serverless image — PORTABLE across RunPod + Vast.
+# Sapiens2 pose keypoint image — portable across RunPod and dedicated GPUs.
 # The 20 GB Sapiens weights are NOT baked. The much smaller person-detector
 # weights ARE baked so the optional top-down crop path never downloads at runtime.
 # On RunPod, configure the cached Sapiens model `facebook/sapiens2-pose-5b`.
-# The Inductor compile-cache is kept in $WEIGHTS_DIR. One image, two entrypoints
-# (RunPod handler / Vast FastAPI).
+# The Inductor compile-cache is kept in $WEIGHTS_DIR. One image, two entrypoints:
+# RunPod's handler or our provider-neutral HTTP queue on Vast/the lab RTX 5080.
 #
 # runtime base (not devel) keeps the image ~10 GB so it builds on a free GH runner.
 # torch.compile only needs a C++ compiler (g++) + Triton, not nvcc — so we add
@@ -26,7 +26,7 @@ ENV PERSON_DETECTOR_NAME=facebook/detr-resnet-101-dc5
 # image — the key itself never touches the repo/image). Handler checks
 # sha256(request.api_key) == API_KEY_SHA256. GIT_SHA lets you verify which build
 # a running container is (via the unauthenticated {"ping": true} request).
-ENV API_KEY_SHA256=88edc437185f02bf774f458a8f3e3404d6b9e49c89ceb3393a31cd5579f9d446
+ENV API_KEY_SHA256=1e058a1a665275a66f1aac6778c8525de451a42c0e9519b84f8802c3452106a5
 ARG GIT_SHA=dev
 ENV GIT_SHA=${GIT_SHA}
 
@@ -67,5 +67,6 @@ COPY run_local.py /app/
 # REQUIRE_SAPIENS_TESTS makes a missing/broken production import fail the build.
 RUN REQUIRE_SAPIENS_TESTS=1 python -m unittest discover -s /app/tests -v
 
-# Default entrypoint = RunPod. Vast overrides CMD -> python adapters/vast_worker.py
+# Default entrypoint = RunPod. A dedicated GPU overrides this with
+# `python -u adapters/http_worker.py`.
 CMD ["python", "-u", "adapters/runpod_handler.py"]

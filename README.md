@@ -1,10 +1,10 @@
 # sapiens-serve
 
-Serverless keypoint detection. Send a **presigned R2 GET** for a video, get
+Whole-body keypoint detection. Send a **presigned R2 GET** for a video, get
 **presigned PUT**. Runs the Meta **Sapiens2 5B** pose model (safetensors,
-`torch.compile`, bf16) on an H100 and returns 308 Sociopticon whole-body
+`torch.compile`, bf16) on an H100 or 16 GB RTX 5080 and returns 308 Sociopticon whole-body
 keypoints. Optional baked DETR person detection supplies a tracked top-down crop.
-One image, thin adapters for **RunPod** and **Vast**.
+One image runs on **RunPod**, a normal **Vast** instance, or the lab GPU box.
 
 > **API reference: [`docs/API.md`](docs/API.md)** — auth, request/response,
 > keypoint indices, and copy-paste curl examples.
@@ -13,14 +13,14 @@ One image, thin adapters for **RunPod** and **Vast**.
 ## Design in one picture
 
 ```
-   [ build, no GPU ]                     [ run, needs H100 ]
-GitHub Actions (amd64) ── push ──► GHCR ── pull ──► RunPod serverless
-                                           cached 5B model mount
+   [ build, no GPU ]                     [ run, H100 or RTX 5080 ]
+GitHub Actions (amd64) ── push ──► GHCR ── pull ──► RunPod or dedicated worker
 ```
 
 - `core/` — platform-agnostic inference (`run_video`). No RunPod/Vast imports.
 - `adapters/runpod_handler.py` — RunPod queue handler.
-- `adapters/vast_worker.py` — FastAPI server for a Vast workergroup.
+- `adapters/http_worker.py` — persistent RunPod-compatible HTTP queue for any dedicated GPU.
+- `adapters/vast_worker.py` — compatibility alias for the HTTP worker.
 - `run_local.py` — on-box benchmark / smoke test (no platform).
 
 **Credential-free by design:** the client passes a presigned GET (video in) and a
@@ -44,7 +44,9 @@ Submit via RunPod `/run`:
 } }
 ```
 
-Vast `POST /infer` accepts the same fields without RunPod's outer `input` object.
+A dedicated worker accepts the exact same asynchronous `/run`, `/status`, and
+`/cancel` calls. It also offers synchronous `/infer` with the fields inside
+RunPod's outer `input` object.
 
 The job returns a small summary; the big keypoint array is PUT to R2:
 
@@ -82,9 +84,18 @@ you need predictable latency. Set active workers back to zero when cost matters
 more than cold-start latency. Set the template image to an immutable
 `ghcr.io/la-luche/serve_luche:<40-character-git-sha>` tag.
 
-**Vast:** create a workergroup from the same image with the start command
-overridden to `python adapters/vast_worker.py`, expose `$PORT`, and point the
-PyWorker template's forward URL + BenchmarkConfig at `/infer`. Same `core/`.
+**Dedicated RTX 5080 (Vast or lab):** run the same image with port 8000 exposed
+and override the command to `python -u adapters/http_worker.py`. Use persistent
+paths for `WEIGHTS_DIR` and `JOB_STATE_DIR`, then set:
+
+```bash
+MODEL_LOAD_DEVICE=cpu MODEL_SIZE=5b BATCH_SIZE=1 COMPILE=1
+PERSON_DETECTOR_DEVICE=cpu WEIGHTS_DIR=/workspace/weights
+JOB_STATE_DIR=/workspace/job-state PORT=8000
+```
+
+`MODEL_LOAD_DEVICE=cpu` is essential on a 16 GB card: the 20 GB fp32 checkpoint
+is restored in system RAM and transferred to CUDA directly as ~10 GB bf16.
 
 ## Cold start
 
@@ -98,6 +109,24 @@ padded to `BATCH_SIZE` before the compiled forward and sliced back afterward, so
 it does not trigger a second compilation. The production API does not override
 the image's `BATCH_SIZE=16`; changing that value between direct requests can
 create another compiled graph.
+
+On an RTX 5080, keep batch size fixed at 1. The compiled graph is cached under
+`WEIGHTS_DIR`; the first forward compiles once and subsequent processes reuse it.
+
+### Measured RTX 5080 profile (5B, bf16, batch 1, 1024×768)
+
+| Metric | Result |
+|---|---:|
+| Resident model VRAM | 9.54 GiB |
+| Peak inference VRAM | 9.84 GiB |
+| First uncached compile/forward | 58.5 s |
+| First forward after process restart with cache | 8.7 s |
+| Warm steady-state throughput | ~2.6 fps |
+| 146-frame canary including cached first forward | 65.2 s (2.24 fps) |
+
+These measurements are from an RTX 5080 with torch 2.12.1/CUDA 13.0. The 5B
+model therefore fits with more than 5 GiB physical VRAM headroom; no inference
+activation checkpointing or quantization is required.
 
 ## Measured on one H100 80GB (batch 32, 1080p, stride 2 = 2,700 frames)
 
@@ -129,9 +158,10 @@ Sapiens code + the *non*-TorchScript checkpoint), then dynamo-TRT. Multi-hour ef
 
 ## Gotchas
 
-- **RTX 5080 / Blackwell:** needs torch >= 2.7 + CUDA 12.8 (the pinned torch 2.4
-  has no `sm_120` kernels). 16 GB fits 1B fine; 0.6b is even lighter
- .
+- **RTX 5080 / Blackwell:** use the pinned torch 2.12.1 + CUDA 13 image,
+  `MODEL_LOAD_DEVICE=cpu`, bf16, and batch 1. Loading the fp32 checkpoint directly
+  on CUDA OOMs before conversion. Activation checkpointing does not reduce
+  inference memory because `torch.inference_mode()` retains no backward activations.
 - **RGB vs BGR:** `core/postproc.py:INPUT_BGR` defaults to RGB. If step-2
   keypoints look mirrored/garbage, flip it — it's the #1 thing to check.
 - **Sub-pixel decode** is a light quarter-pixel Darkpose-style shift; swap in

@@ -12,6 +12,7 @@ paid once, not on every cold start.
 from __future__ import annotations
 
 import glob
+import gc
 import os
 import time
 
@@ -34,6 +35,7 @@ RUNPOD_HF_CACHE = os.environ.get(
 os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(WEIGHTS_DIR, "inductor_cache"))
 
 _COMPILE = os.environ.get("COMPILE", "1") == "1"
+_MODEL_LOAD_DEVICE = os.environ.get("MODEL_LOAD_DEVICE")
 
 
 def _find_config() -> str:
@@ -92,13 +94,20 @@ def _load():
     from sapiens.pose.models import init_model
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # The 5B checkpoint is ~20 GB in fp32. Loading it directly on a 16 GB GPU
+    # OOMs before the existing bf16 conversion can run. MODEL_LOAD_DEVICE=cpu
+    # builds and restores the fp32 model in system RAM, then transfers each
+    # parameter to CUDA as bf16 so only the ~10 GB final weights touch VRAM.
+    load_device = _MODEL_LOAD_DEVICE or device
+    if load_device == "cuda" and device != "cuda":
+        raise RuntimeError("MODEL_LOAD_DEVICE=cuda requested but CUDA is unavailable")
     log(f"loading model: size={MODEL_SIZE} device={device} compile={_COMPILE} "
-        f"weights_dir={WEIGHTS_DIR}")
+        f"load_device={load_device} weights_dir={WEIGHTS_DIR}")
     cfg = _find_config()
     ckpt = _ensure_checkpoint()
 
     t = time.time()
-    model = init_model(cfg, ckpt, device=device)
+    model = init_model(cfg, ckpt, device=load_device)
     model.eval()
     log(f"init_model done in {time.time() - t:.1f}s")
 
@@ -109,8 +118,18 @@ def _load():
     codec_cfg = dict(model.cfg.codec)
     codec_cfg.pop("type", None)
     model.codec = UDPHeatmap(**codec_cfg)
-    model = model.to(torch.bfloat16)
-    log("model -> bf16, codec attached")
+    model = model.to(device=device, dtype=torch.bfloat16)
+    gc.collect()
+    if device == "cuda":
+        torch.cuda.empty_cache()
+        allocated = torch.cuda.memory_allocated() / 2**30
+        reserved = torch.cuda.memory_reserved() / 2**30
+        log(
+            f"model -> bf16 on cuda, codec attached | "
+            f"VRAM allocated={allocated:.2f} GiB reserved={reserved:.2f} GiB"
+        )
+    else:
+        log("model -> bf16 on cpu, codec attached")
 
     fwd = model
     if _COMPILE and device == "cuda":

@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -344,6 +345,7 @@ def detect_person_track(
     detection_stride: int,
     threshold: float,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    cancel_hook: Callable[[], None] | None = None,
 ) -> tuple[np.ndarray | None, dict]:
     """Detect, track, and interpolate one patient box for every source frame."""
     indices = list(range(0, decoder.num_frames, detection_stride))
@@ -354,6 +356,8 @@ def detect_person_track(
     detector = _get_detector(device)
     detection_count = 0
     for start in range(0, len(indices), batch_size):
+        if cancel_hook is not None:
+            cancel_hook()
         chunk = indices[start : start + batch_size]
         frames = decoder.get_batch(chunk, device="cpu")
         candidates = detector.detect(frames, threshold)

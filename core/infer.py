@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 
 import numpy as np
 import torch
 
 from . import sink
 from .decode import GpuDecoder
+from .errors import InferenceCancelled
 from .log import log
 from .model import DEVICE, FORWARD, MODEL
 from .preprocess import GpuPreprocessor
@@ -21,7 +23,6 @@ from .video import Decoder, fetch_to_local
 
 DEFAULT_BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "16"))
 KEYPOINT_FORMAT = "sapiens2_keypoints308"
-
 # GPU heatmap->keypoint decoder (DARK-UDP on GPU). Falls back to the CPU codec on
 # non-cuda (e.g. local mac tests).
 _DECODER = (
@@ -43,6 +44,7 @@ def run_video(
     person_detection_stride: int = 5,
     person_box_overflow: float = 0.25,
     person_detection_threshold: float = 0.3,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict:
     if frame_stride < 1:
         raise ValueError("frame_stride must be >= 1")
@@ -54,6 +56,12 @@ def run_video(
         raise ValueError("person_box_overflow must be between 0 and 2")
     if not 0.0 < person_detection_threshold <= 1.0:
         raise ValueError("person_detection_threshold must be in (0, 1]")
+
+    def check_cancelled() -> None:
+        if cancel_check is not None and cancel_check():
+            raise InferenceCancelled("inference cancelled")
+
+    check_cancelled()
     t0 = time.time()
     log(
         f"run_video stride={frame_stride} batch={batch_size} "
@@ -62,6 +70,7 @@ def run_video(
     local_path, is_temp = fetch_to_local(video_url)
     log(f"video fetched in {time.time() - t0:.1f}s")
     try:
+        check_cancelled()
         dec = Decoder(local_path)
         pre = GpuPreprocessor(dec.height, dec.width, DEVICE, dtype=torch.bfloat16)
         person_boxes = None
@@ -75,12 +84,15 @@ def run_video(
             try:
                 from .person import detect_person_track
 
+                detector_device = os.environ.get("PERSON_DETECTOR_DEVICE", DEVICE)
                 person_boxes, detection_stats = detect_person_track(
                     dec,
-                    device=DEVICE,
+                    device=detector_device,
                     detection_stride=person_detection_stride,
                     threshold=person_detection_threshold,
+                    cancel_hook=check_cancelled,
                 )
+                detection_stats["device"] = detector_device
                 person_meta.update(detection_stats)
             except Exception as exc:
                 # Detection is an optional preprocessing enhancement. Preserve
@@ -101,6 +113,10 @@ def run_video(
                 )
 
         cuda = DEVICE == "cuda"
+        if cuda:
+            # Reset to the model's resident baseline so max_memory_allocated
+            # captures the true model + batch peak for 16 GB worker sizing.
+            torch.cuda.reset_peak_memory_stats()
         nbatches = (len(range(0, dec.num_frames, max(1, frame_stride))) + batch_size - 1) // batch_size
         log(f"video {dec.width}x{dec.height} {dec.fps:.1f}fps {dec.num_frames} frames | "
             f"stride={frame_stride} batch={batch_size} -> {nbatches} batches")
@@ -110,6 +126,7 @@ def run_video(
         n = 0
         tprev = time.time()
         for bi, (indices, frames) in enumerate(dec.iter_batches(frame_stride, batch_size, DEVICE)):
+            check_cancelled()
             t_dec += time.time() - tprev  # decode + H2D (iterator produced this batch)
 
             t = time.time()
@@ -136,6 +153,9 @@ def run_video(
             if cuda:
                 torch.cuda.synchronize()
             t_fwd += time.time() - t
+            if cuda and bi == 0:
+                peak_gib = torch.cuda.max_memory_allocated() / 2**30
+                log(f"first forward peak VRAM={peak_gib:.2f} GiB")
 
             t = time.time()
             if _DECODER is not None:
@@ -179,9 +199,13 @@ def run_video(
         if cuda:
             torch.cuda.synchronize()
         el = time.time() - t0
+        peak_vram_gib = (
+            round(torch.cuda.max_memory_allocated() / 2**30, 2) if cuda else None
+        )
         log(f"DONE {n} frames in {el:.1f}s = {n/el:.1f} fps | stages: "
             f"decode {t_dec:.1f}s ({100*t_dec/el:.0f}%) warp {t_pre:.1f}s ({100*t_pre/el:.0f}%) "
-            f"fwd {t_fwd:.1f}s ({100*t_fwd/el:.0f}%) codec {t_codec:.1f}s ({100*t_codec/el:.0f}%)")
+            f"fwd {t_fwd:.1f}s ({100*t_fwd/el:.0f}%) codec {t_codec:.1f}s ({100*t_codec/el:.0f}%) "
+            f"peak_vram={peak_vram_gib} GiB")
 
         results = {
             "keypoint_format": KEYPOINT_FORMAT,
@@ -205,6 +229,7 @@ def run_video(
             "frames": frames_out,
         }
 
+        check_cancelled()
         elapsed = round(time.time() - t0, 2)
         summary = {
             "status": "ok",
@@ -227,6 +252,7 @@ def run_video(
             "person_detection": person_meta,
             "infer_seconds": elapsed,
             "fps_processed": round(n / elapsed, 2) if elapsed else None,
+            "peak_vram_gib": peak_vram_gib,
         }
         if result_put_url or result_local_path:
             summary["results_location"] = sink.emit(
