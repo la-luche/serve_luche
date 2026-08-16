@@ -1,4 +1,4 @@
-"""Load Sapiens2 pose model ONCE at import, bf16 + torch.compile (warm worker).
+"""Load Sapiens2 pose model once and optionally warm its first forward.
 
 Portable across RunPod / Vast: the 20 GB checkpoint is NOT baked into the image.
 On RunPod, prefer its cached-model mount so the checkpoint is present before the
@@ -6,8 +6,9 @@ worker starts and model download time is not billed. Otherwise ensure it exists
 under $WEIGHTS_DIR (download from HF — ungated):
   RunPod cached model -> /runpod-volume/huggingface-cache/hub/...
   RunPod/Vast fallback -> WEIGHTS_DIR (persistent storage when configured)
-The Inductor compile-cache also lives under $WEIGHTS_DIR so the ~2 min compile is
-paid once, not on every cold start.
+RunPod Serverless defaults to eager inference: compiling improves throughput but
+adds a large, host-dependent first-forward delay. Dedicated workers can opt back
+in with ``COMPILE=1`` and keep the Inductor cache on persistent storage.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ RUNPOD_HF_CACHE = os.environ.get(
 # Persist Inductor's compiled kernels on the shared volume across cold starts.
 os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(WEIGHTS_DIR, "inductor_cache"))
 
-_COMPILE = os.environ.get("COMPILE", "1") == "1"
+_COMPILE = os.environ.get("COMPILE", "0") == "1"
 _MODEL_LOAD_DEVICE = os.environ.get("MODEL_LOAD_DEVICE")
 
 
@@ -144,3 +145,32 @@ def _load():
 # MODEL keeps .pipeline/.data_preprocessor/.codec/.cfg/.pose_metainfo (eager wrapper);
 # FORWARD is the compiled callable used for the heavy forward pass.
 MODEL, FORWARD, DEVICE = _load()
+
+
+def warmup(batch_size: int | None = None) -> float:
+    """Pay CUDA initialization (and optional compilation) before worker readiness."""
+    if DEVICE != "cuda":
+        log("model warmup skipped: CUDA unavailable")
+        return 0.0
+
+    batch = batch_size or int(os.environ.get("BATCH_SIZE", "1"))
+    if batch < 1:
+        raise ValueError("warmup batch size must be >= 1")
+
+    log(f"model warmup starting: batch={batch} compile={_COMPILE}")
+    started = time.time()
+    torch.cuda.reset_peak_memory_stats()
+    inputs = torch.zeros(
+        (batch, 3, 1024, 768),
+        device=DEVICE,
+        dtype=torch.bfloat16,
+    )
+    with torch.inference_mode():
+        output = FORWARD(inputs)
+    torch.cuda.synchronize()
+    elapsed = time.time() - started
+    peak_gib = torch.cuda.max_memory_allocated() / 2**30
+    del output, inputs
+    torch.cuda.empty_cache()
+    log(f"model warmup done in {elapsed:.1f}s; peak VRAM={peak_gib:.2f} GiB")
+    return elapsed

@@ -1,9 +1,9 @@
 # sapiens-serve
 
 Whole-body keypoint detection. Send a **presigned R2 GET** for a video, get
-**presigned PUT**. Runs the Meta **Sapiens2 5B** pose model (safetensors,
-`torch.compile`, bf16) on an H100 or 16 GB RTX 5080 and returns 308 Sociopticon whole-body
-keypoints. Optional baked DETR person detection supplies a tracked top-down crop.
+**presigned PUT**. Runs the Meta **Sapiens2 5B** pose model (safetensors, bf16)
+on a 16–24 GB GPU and returns 308 Sociopticon whole-body keypoints. Optional
+baked DETR person detection supplies a tracked top-down crop.
 One image runs on **RunPod**, a normal **Vast** instance, or the lab GPU box.
 
 > **API reference: [`docs/API.md`](docs/API.md)** — auth, request/response,
@@ -13,7 +13,7 @@ One image runs on **RunPod**, a normal **Vast** instance, or the lab GPU box.
 ## Design in one picture
 
 ```
-   [ build, no GPU ]                     [ run, H100 or RTX 5080 ]
+   [ build, no GPU ]                     [ run, warm 16–24 GB GPU ]
 GitHub Actions (amd64) ── push ──► GHCR ── pull ──► RunPod or dedicated worker
 ```
 
@@ -37,7 +37,7 @@ Submit via RunPod `/run`:
     "video_url": "https://<r2>/video.mp4?X-Amz-...",
     "result_put_url": "https://<r2>/results/abc.json?X-Amz-...",
     "frame_stride": 2,
-    "batch_size": 16,
+    "batch_size": 1,
     "person_detection": true,
     "person_detection_stride": 5,
     "person_box_overflow": 0.25
@@ -74,14 +74,15 @@ keypoints are in **original video pixel coordinates**.
 
 ## Deploy
 
-**RunPod (recommended):** create a queue-based Serverless endpoint from the GHCR
+**RunPod (production):** create a queue-based Serverless endpoint from the GHCR
 image. In the endpoint's **Model** field select `facebook/sapiens2-pose-5b` so
 RunPod mounts the checkpoint from its model cache before starting the worker.
 The loader resolves that mount automatically. Keep the default container command
-(`python -u adapters/runpod_handler.py`), choose H100 80 GB, enable FlashBoot,
-set execution timeout and job TTL to 24 hours, and use one active worker while
-you need predictable latency. Set active workers back to zero when cost matters
-more than cold-start latency. Set the template image to an immutable
+(`python -u adapters/runpod_handler.py`), enable FlashBoot, set execution timeout
+and job TTL to 24 hours, and set **active workers = 1, max workers = 1**. Prioritize
+the 24 GB L4 / RTX A5000 / RTX 3090 / RTX 4090 pools. The batch-1 eager profile
+fits these cards; requests queue behind the warm worker instead of starting a
+second cold worker. Set the template image to an immutable
 `ghcr.io/la-luche/serve_luche:<40-character-git-sha>` tag.
 
 **Dedicated RTX 5080 (Vast or lab):** run the same image with port 8000 exposed
@@ -99,21 +100,32 @@ is restored in system RAM and transferred to CUDA directly as ~10 GB bf16.
 
 ## Cold start
 
-RunPod's cached model avoids downloading the 20 GB checkpoint inside billed worker
-time, but PyTorch must still initialize the model and compile its first forward.
-One active worker removes that user-visible cold start. With zero active workers,
-FlashBoot helps subsequent starts but the first deployment can still be slow.
+The production contract is deliberately **warm, eager, and batch 1**:
+
+- `PRELOAD_MODEL=1` imports the full runtime before registering the handler, so
+  RunPod does not report a worker ready while it is still loading 20 GB of weights.
+- `WARMUP_ON_START=1` pays CUDA initialization before readiness.
+- `COMPILE=0` removes the host-specific Inductor compile from every fresh worker.
+  Inference is slower, but startup has a much tighter tail.
+- `MODEL_LOAD_DEVICE=cpu` restores fp32 weights in system RAM and moves them to
+  CUDA as bf16, allowing the 5B model to start safely on 16–24 GB cards.
+- One active worker is the only way to guarantee no scale-to-zero cold start.
+  FlashBoot and the cached model reduce recovery time but are not an availability
+  guarantee. Keep `workersMax=1`; a burst queues rather than spawning a cold copy.
+
+RunPod's cached model avoids downloading the 20 GB checkpoint inside billed
+worker time. A worker replacement still has to initialize the model, but it is
+not offered work until initialization and warmup succeed.
 
 Inference uses one fixed shape per configured batch size. A short final batch is
-padded to `BATCH_SIZE` before the compiled forward and sliced back afterward, so
-it does not trigger a second compilation. The production API does not override
-the image's `BATCH_SIZE=16`; changing that value between direct requests can
-create another compiled graph.
+padded to `BATCH_SIZE` before the forward and sliced back afterward. Production
+uses `BATCH_SIZE=1`; dedicated workers with persistent compile caches may opt
+back into `COMPILE=1` and a hardware-appropriate fixed batch.
 
 On an RTX 5080, keep batch size fixed at 1. The compiled graph is cached under
 `WEIGHTS_DIR`; the first forward compiles once and subsequent processes reuse it.
 
-### Measured RTX 5080 profile (5B, bf16, batch 1, 1024×768)
+### Measured dedicated RTX 5080 profile (5B, bf16, compiled batch 1, 1024×768)
 
 | Metric | Result |
 |---|---:|

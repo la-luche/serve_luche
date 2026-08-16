@@ -41,7 +41,7 @@ curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
         "video_url": "https://<r2>/clip.mp4?X-Amz-…",
         "result_put_url": "https://<r2>/out/kp.json?X-Amz-…",
         "frame_stride": 1,
-        "batch_size": 16,
+        "batch_size": 1,
         "person_detection": true,
         "person_detection_stride": 5,
         "person_box_overflow": 0.25,
@@ -54,13 +54,15 @@ curl https://api.runpod.ai/v2/v29lgubwpc998d/status/<job-id> \
   -H "Authorization: Bearer $RUNPOD_API_KEY"
 ```
 
-### Version / health check (unauthenticated, no model load)
+### Version / health check (unauthenticated)
 Use this to confirm which build a container is running:
 ```bash
 curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
   -H "Authorization: Bearer $RUNPOD_API_KEY" -H "Content-Type: application/json" \
   -d '{"input": {"ping": true}}'
 # -> {"status":"ok","git_sha":"<40-hex>","model_size":"5b",
+#     "batch_size":1,"compile":false,"preload_model":true,
+#     "warmup_on_start":true,"model_load_device":"cpu",
 #     "sapiens_model_revision":"<40-hex>",
 #     "person_detector":"facebook/detr-resnet-101-dc5",
 #     "person_detector_revision":"<40-hex>"}
@@ -92,7 +94,7 @@ persisted.
 | `video_url` | string | — | **required**; presigned R2 **GET** (or any http(s) URL / local path) |
 | `result_put_url` | string | none | presigned R2 **PUT**; if omitted, keypoints are returned **inline** |
 | `frame_stride` | int | `1` | process every Nth frame (`1` = every frame) |
-| `batch_size` | int | `16` | frames per GPU batch |
+| `batch_size` | int | `1` | frames per GPU batch |
 | `person_detection` | bool | `false` | use a tracked person box instead of the full frame |
 | `person_detection_stride` | int | `5` | run DETR every Nth **source** frame, then interpolate boxes |
 | `person_box_overflow` | float | `0.25` | extra detected-box width/height added on **each side** (`0.25` gives a 1.5× box before 3:4 aspect correction) |
@@ -194,19 +196,23 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
 
 ## Notes / current characteristics
 
-- **Warm throughput (H100, 5B, compiled):** ~11 fps → a 30 s / 724-frame clip in
-  ~65 s. Eager (no compile) ~8.6 fps.
+- **Historical warm throughput (H100, 5B, compiled):** ~11 fps → a 30 s /
+  724-frame clip in ~65 s. Eager (no compile) was ~8.6 fps.
 - **Warm throughput (RTX 5080, 5B, compiled, batch 1):** ~2.6 fps with 9.84 GiB
   peak VRAM. A 146-frame canary took 65.2 s including an 8.7 s cached first
   forward after process restart.
-- **Cold start** (fresh worker): image pull + model initialization + first-forward
-  compilation can still take minutes. On RunPod, configure the endpoint Model as
+- **Production latency profile:** one active batch-1 worker, eager inference,
+  model preload + first-forward warmup before RunPod readiness. Throughput is
+  intentionally lower so the worker can stay resident on a cheaper 24 GB GPU.
+- **Cold start:** configure the endpoint Model as
   `facebook/sapiens2-pose-5b` to avoid downloading the 20 GB checkpoint in the
-  worker. Use one active worker when predictable latency matters.
+  worker. FlashBoot reduces recovery time; one active worker removes normal
+  scale-to-zero cold starts.
 - **Env vars:** `MODEL_SIZE` (default `5b`), `WEIGHTS_DIR` (`/weights`),
   `RUNPOD_HF_CACHE` (`/runpod-volume/huggingface-cache/hub`),
-  `BATCH_SIZE` (`16`), `COMPILE` (`1`=default Inductor `torch.compile`, `0`=eager),
-  `MODEL_LOAD_DEVICE` (`cpu` is required for 5B on a 16 GB RTX 5080),
+  `BATCH_SIZE` (`1`), `COMPILE` (`0`=default eager, `1`=Inductor compile),
+  `MODEL_LOAD_DEVICE` (`cpu`), `PRELOAD_MODEL` (`1`),
+  `WARMUP_ON_START` (`1`),
   `JOB_STATE_DIR` (persistent dedicated-worker status directory),
   `SAPIENS_MODEL_REVISION` (pinned pose-checkpoint commit),
   `PERSON_DETECTOR_MODEL` (baked path by default),

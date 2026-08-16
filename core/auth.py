@@ -9,6 +9,13 @@ _EXPECTED = os.environ.get("API_KEY_SHA256", "")
 GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 
 
+def _enabled(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def check(api_key: str | None) -> bool:
     if not _EXPECTED or not isinstance(api_key, str):
         return False
@@ -23,6 +30,11 @@ def version() -> dict:
         "git_sha": GIT_SHA,
         "api_key_sha256": _EXPECTED,
         "model_size": os.environ.get("MODEL_SIZE", "5b"),
+        "batch_size": int(os.environ.get("BATCH_SIZE", "1")),
+        "compile": _enabled("COMPILE", False),
+        "preload_model": _enabled("PRELOAD_MODEL", True),
+        "warmup_on_start": _enabled("WARMUP_ON_START", True),
+        "model_load_device": os.environ.get("MODEL_LOAD_DEVICE", "auto"),
         "sapiens_model_revision": os.environ.get(
             "SAPIENS_MODEL_REVISION", "unknown"
         ),

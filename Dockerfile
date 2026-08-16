@@ -17,6 +17,12 @@ ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_BREAK_SYSTEM_PACKAGES=
 # (running a script puts ITS dir on sys.path, not the workdir).
 ENV PYTHONPATH=/app
 ENV WEIGHTS_DIR=/weights MODEL_SIZE=5b
+# Production Serverless profile: initialize from CPU so the fp32 checkpoint
+# never has to fit in VRAM, run batch 1 so 24 GB GPUs are safe, and prefer eager
+# inference so there is no per-host Inductor compile in the cold-start path.
+# The worker imports + warms the runtime before RunPod sees it as ready.
+ENV MODEL_LOAD_DEVICE=cpu BATCH_SIZE=1 COMPILE=0
+ENV PRELOAD_MODEL=1 WARMUP_ON_START=1
 ENV SAPIENS_MODEL_REVISION=ada1f29aa1fd454ca28665c700923a0101b6b24f
 ENV PERSON_DETECTOR_DIR=/opt/models/detr-resnet-101-dc5
 ENV PERSON_DETECTOR_MODEL=/opt/models/detr-resnet-101-dc5
