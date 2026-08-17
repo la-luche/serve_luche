@@ -106,7 +106,13 @@ def _load():
     ckpt = _ensure_checkpoint()
 
     t = time.time()
-    model = load_pose_model(cfg, ckpt, device=load_device)
+    model = load_pose_model(
+        cfg,
+        ckpt,
+        device=load_device,
+        target_device=device if device == "cuda" else None,
+        target_dtype=torch.bfloat16 if device == "cuda" else None,
+    )
     model.eval()
     log(f"init_model done in {time.time() - t:.1f}s")
 
@@ -117,7 +123,9 @@ def _load():
     codec_cfg = dict(model.cfg.codec)
     codec_cfg.pop("type", None)
     model.codec = UDPHeatmap(**codec_cfg)
+    t = time.time()
     model = model.to(device=device, dtype=torch.bfloat16)
+    log(f"final model device/dtype normalization done in {time.time() - t:.1f}s")
     gc.collect()
     if device == "cuda":
         torch.cuda.empty_cache()
