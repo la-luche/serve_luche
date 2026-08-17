@@ -93,10 +93,10 @@ def _load():
     from .model_loader import load_pose_model
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # The 5B checkpoint is ~20 GB in fp32. Loading it directly on a 16 GB GPU
-    # OOMs before the existing bf16 conversion can run. MODEL_LOAD_DEVICE=cpu
-    # builds and restores the fp32 model in system RAM, then transfers each
-    # parameter to CUDA as bf16 so only the ~10 GB final weights touch VRAM.
+    # The 5B checkpoint is ~20 GB in fp32. The fast path builds on ``meta`` and
+    # streams each tensor to CUDA as bf16. MODEL_LOAD_DEVICE=cpu remains the
+    # safe upstream fallback, because restoring the fp32 model directly on a
+    # 16–24 GB GPU would OOM before conversion.
     load_device = _MODEL_LOAD_DEVICE or device
     if load_device == "cuda" and device != "cuda":
         raise RuntimeError("MODEL_LOAD_DEVICE=cuda requested but CUDA is unavailable")

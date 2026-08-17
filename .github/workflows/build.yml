@@ -1,8 +1,8 @@
 name: build-and-push
 
 # Builds the portable Sapiens2 image (amd64) and pushes to GHCR. The 20 GB
-# Sapiens weights are supplied through RunPod's model cache; the small public
-# DETR person detector is baked at build time. No HF token is required.
+# Sapiens weights are downloaded directly when a worker is replaced; the small
+# public DETR person detector is baked at build time. No HF token is required.
 
 on:
   push:

@@ -33,8 +33,6 @@ ENV PERSON_DETECTOR_NAME=facebook/detr-resnet-101-dc5
 # sha256(request.api_key) == API_KEY_SHA256. GIT_SHA lets you verify which build
 # a running container is (via the unauthenticated {"ping": true} request).
 ENV API_KEY_SHA256=1e058a1a665275a66f1aac6778c8525de451a42c0e9519b84f8802c3452106a5
-ARG GIT_SHA=dev
-ENV GIT_SHA=${GIT_SHA}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ffmpeg build-essential \
@@ -72,6 +70,12 @@ COPY run_local.py /app/
 # Pure tracking tests plus mandatory Sapiens-backed affine/fallback geometry tests.
 # REQUIRE_SAPIENS_TESTS makes a missing/broken production import fail the build.
 RUN REQUIRE_SAPIENS_TESTS=1 python -m unittest discover -s /app/tests -v
+
+# Put the per-build fingerprint after every expensive dependency/test layer.
+# Changing only GIT_SHA must not invalidate the multi-GB base image layers that
+# RunPod may already have cached on a worker host.
+ARG GIT_SHA=dev
+ENV GIT_SHA=${GIT_SHA}
 
 # Default entrypoint = RunPod. A dedicated GPU overrides this with
 # `python -u adapters/http_worker.py`.

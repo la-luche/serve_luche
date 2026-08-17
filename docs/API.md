@@ -5,7 +5,7 @@ URL), get **308 Sapiens2 keypoints per frame** back — either inline (small cli
 or written to R2 (presigned PUT). Same image runs on **RunPod**, a normal Vast
 instance, and the lab RTX 5080.
 
-- **Live RunPod endpoint:** `uf9tlbqtd90q1y`
+- **Live RunPod endpoint:** `88aorjym3kxo87`
 - **Image:** `ghcr.io/la-luche/serve_luche` (public)
 - **Model:** Sapiens2-pose-5b, 308-keypoint Sociopticon (body + feet + hands + face)
 
@@ -33,7 +33,7 @@ Submit a job, poll for the result.
 
 ```bash
 # submit
-curl -X POST https://api.runpod.ai/v2/uf9tlbqtd90q1y/run \
+curl -X POST https://api.runpod.ai/v2/88aorjym3kxo87/run \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"input": {
@@ -50,14 +50,14 @@ curl -X POST https://api.runpod.ai/v2/uf9tlbqtd90q1y/run \
 # -> {"id": "<job-id>", "status": "IN_QUEUE"}
 
 # poll
-curl https://api.runpod.ai/v2/uf9tlbqtd90q1y/status/<job-id> \
+curl https://api.runpod.ai/v2/88aorjym3kxo87/status/<job-id> \
   -H "Authorization: Bearer $RUNPOD_API_KEY"
 ```
 
 ### Version / health check (unauthenticated)
 Use this to confirm which build a container is running:
 ```bash
-curl -X POST https://api.runpod.ai/v2/uf9tlbqtd90q1y/run \
+curl -X POST https://api.runpod.ai/v2/88aorjym3kxo87/run \
   -H "Authorization: Bearer $RUNPOD_API_KEY" -H "Content-Type: application/json" \
   -d '{"input": {"ping": true}}'
 # -> {"status":"ok","git_sha":"<40-hex>","model_size":"5b",
@@ -210,6 +210,9 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
   more than 20 minutes without starting the container. Direct Hugging Face
   download fetched the 20.48 GB checkpoint in 53.6 seconds. FlashBoot reduces
   recovery time; one active worker removes normal scale-to-zero cold starts.
+- **Measured replacement:** optimized handler preparation is 98.7 seconds from
+  container start, down from 376.6 seconds. Production is pinned to `US-WA-1`
+  because repeated `EUR-IS-2` image initializations stalled during rollout.
 - **Env vars:** `MODEL_SIZE` (default `5b`), `WEIGHTS_DIR` (`/weights`),
   `RUNPOD_HF_CACHE` (`/runpod-volume/huggingface-cache/hub`),
   `BATCH_SIZE` (`1`), `COMPILE` (`0`=default eager, `1`=Inductor compile),

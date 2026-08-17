@@ -125,7 +125,10 @@ def load_pose_model(
             # Startup latency is secondary to availability. A future upstream
             # architecture may create a tensor that cannot live on ``meta``;
             # preserve the proven loader rather than boot-looping the endpoint.
-            log(f"meta checkpoint restore failed; using upstream loader: {exc!r}")
+            message = repr(exc)
+            exc.__traceback__ = None
+            del exc
+            log(f"meta checkpoint restore failed; using upstream loader: {message}")
             gc.collect()
             try:
                 import torch

@@ -110,7 +110,8 @@ The production contract is deliberately **warm, eager, and batch 1**:
 - `MODEL_LOAD_DEVICE=cpu` restores fp32 weights in system RAM and moves them to
   CUDA as bf16, allowing the 5B model to start safely on 16–24 GB cards.
 - `FAST_META_LOAD=1` builds the 5B module graph on PyTorch's zero-storage
-  `meta` device and assigns the safetensors state directly. If a future Sapiens
+  `meta` device, streams each checkpoint tensor directly to its final bf16 CUDA
+  slot, and assigns it without creating a second fp32 model. If a future Sapiens
   architecture cannot use this path, startup falls back to the upstream loader.
 - One active worker is the only way to guarantee no scale-to-zero cold start.
   FlashBoot reduces recovery time but is not an availability guarantee. Keep
@@ -125,18 +126,29 @@ warmup succeed.
 
 | Stage | Result |
 |---|---:|
-| Immutable image available | 39 s |
-| Download 20.48 GB checkpoint | 53.6 s |
-| CPU checkpoint/model initialization | 249.4 s |
-| Preload + bf16 CUDA transfer complete | 375.3 s from container start |
-| Eager batch-1 warmup | 1.1 s |
-| Handler ready | 376.6 s from container start |
-| Resident / peak warmup VRAM | 9.67 / 9.98 GiB |
+| Cache-cold image provision/pull in US-WA-1 | ~137 s |
+| Download 20.48 GB checkpoint | 34.2 s |
+| Build zero-storage model graph | 0.4 s |
+| Stream checkpoint to bf16 CUDA | 58.5 s |
+| Assign state tensors | 0.3 s |
+| Eager batch-1 warmup | 1.0 s |
+| Handler ready | 98.7 s from container start |
+| Cache-cold worker record → handler ready | ~236 s |
+| Resident / peak warmup VRAM | 9.63 / 9.93 GiB |
+
+The original upstream restore took 376.6 s after container start, including
+249.4 s just to build/copy the fp32 model. The optimized path cuts container
+preparation by 74% and produced bit-identical keypoints in the production
+canary (8,316 values compared, maximum absolute difference 0).
 
 RunPod may label a worker `RUNNING` before the SDK handler has registered. Use
 the handler's `worker runtime ready` log line or a successful ping as the
 readiness signal. Normal requests avoid this replacement path because production
 keeps one active worker.
+
+Production is pinned to `US-WA-1`: repeated `EUR-IS-2` allocations remained in
+image initialization while measured US-WA workers progressed normally. Revisit
+the pin only with a measured replacement canary in another region.
 
 Inference uses one fixed shape per configured batch size. A short final batch is
 padded to `BATCH_SIZE` before the forward and sliced back afterward. Production
