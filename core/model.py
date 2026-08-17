@@ -1,11 +1,9 @@
 """Load Sapiens2 pose model once and optionally warm its first forward.
 
 Portable across RunPod / Vast: the 20 GB checkpoint is NOT baked into the image.
-On RunPod, prefer its cached-model mount so the checkpoint is present before the
-worker starts and model download time is not billed. Otherwise ensure it exists
-under $WEIGHTS_DIR (download from HF — ungated):
-  RunPod cached model -> /runpod-volume/huggingface-cache/hub/...
-  RunPod/Vast fallback -> WEIGHTS_DIR (persistent storage when configured)
+RunPod Serverless downloads it directly from Hugging Face; dedicated workers
+should persist ``WEIGHTS_DIR``. A legacy RunPod cached-model mount is still
+recognized for compatibility, but is not part of the production deployment.
 RunPod Serverless defaults to eager inference: compiling improves throughput but
 adds a large, host-dependent first-forward delay. Dedicated workers can opt back
 in with ``COMPILE=1`` and keep the Inductor cache on persistent storage.
@@ -92,7 +90,7 @@ def _ensure_checkpoint() -> str:
 
 
 def _load():
-    from sapiens.pose.models import init_model
+    from .model_loader import load_pose_model
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # The 5B checkpoint is ~20 GB in fp32. Loading it directly on a 16 GB GPU
@@ -108,7 +106,7 @@ def _load():
     ckpt = _ensure_checkpoint()
 
     t = time.time()
-    model = init_model(cfg, ckpt, device=load_device)
+    model = load_pose_model(cfg, ckpt, device=load_device)
     model.eval()
     log(f"init_model done in {time.time() - t:.1f}s")
 

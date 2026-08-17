@@ -58,6 +58,7 @@ class RunPodStartupTests(unittest.TestCase):
         self.assertFalse(result["compile"])
         self.assertTrue(result["preload_model"])
         self.assertTrue(result["warmup_on_start"])
+        self.assertTrue(result["fast_meta_load"])
         load_runtime.assert_not_called()
 
     def test_valid_job_uses_preloaded_runtime(self):

@@ -62,7 +62,8 @@ curl -X POST https://api.runpod.ai/v2/uf9tlbqtd90q1y/run \
   -d '{"input": {"ping": true}}'
 # -> {"status":"ok","git_sha":"<40-hex>","model_size":"5b",
 #     "batch_size":1,"compile":false,"preload_model":true,
-#     "warmup_on_start":true,"model_load_device":"cpu",
+#     "warmup_on_start":true,"fast_meta_load":true,
+#     "model_load_device":"cpu",
 #     "sapiens_model_revision":"<40-hex>",
 #     "person_detector":"facebook/detr-resnet-101-dc5",
 #     "person_detector_revision":"<40-hex>"}
@@ -212,7 +213,8 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
 - **Env vars:** `MODEL_SIZE` (default `5b`), `WEIGHTS_DIR` (`/weights`),
   `RUNPOD_HF_CACHE` (`/runpod-volume/huggingface-cache/hub`),
   `BATCH_SIZE` (`1`), `COMPILE` (`0`=default eager, `1`=Inductor compile),
-  `MODEL_LOAD_DEVICE` (`cpu`), `PRELOAD_MODEL` (`1`),
+  `MODEL_LOAD_DEVICE` (`cpu`), `FAST_META_LOAD` (`1`),
+  `PRELOAD_MODEL` (`1`),
   `WARMUP_ON_START` (`1`),
   `JOB_STATE_DIR` (persistent dedicated-worker status directory),
   `SAPIENS_MODEL_REVISION` (pinned pose-checkpoint commit),

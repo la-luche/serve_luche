@@ -109,6 +109,9 @@ The production contract is deliberately **warm, eager, and batch 1**:
   Inference is slower, but startup has a much tighter tail.
 - `MODEL_LOAD_DEVICE=cpu` restores fp32 weights in system RAM and moves them to
   CUDA as bf16, allowing the 5B model to start safely on 16–24 GB cards.
+- `FAST_META_LOAD=1` builds the 5B module graph on PyTorch's zero-storage
+  `meta` device and assigns the safetensors state directly. If a future Sapiens
+  architecture cannot use this path, startup falls back to the upstream loader.
 - One active worker is the only way to guarantee no scale-to-zero cold start.
   FlashBoot reduces recovery time but is not an availability guarantee. Keep
   `workersMax=1`; a burst queues rather than spawning a cold copy.

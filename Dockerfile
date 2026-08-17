@@ -1,7 +1,7 @@
 # Sapiens2 pose keypoint image — portable across RunPod and dedicated GPUs.
 # The 20 GB Sapiens weights are NOT baked. The much smaller person-detector
 # weights ARE baked so the optional top-down crop path never downloads at runtime.
-# On RunPod, configure the cached Sapiens model `facebook/sapiens2-pose-5b`.
+# RunPod downloads Sapiens directly; do not attach the legacy Model Store entry.
 # The Inductor compile-cache is kept in $WEIGHTS_DIR. One image, two entrypoints:
 # RunPod's handler or our provider-neutral HTTP queue on Vast/the lab RTX 5080.
 #
@@ -22,7 +22,7 @@ ENV WEIGHTS_DIR=/weights MODEL_SIZE=5b
 # inference so there is no per-host Inductor compile in the cold-start path.
 # The worker imports + warms the runtime before RunPod sees it as ready.
 ENV MODEL_LOAD_DEVICE=cpu BATCH_SIZE=1 COMPILE=0
-ENV PRELOAD_MODEL=1 WARMUP_ON_START=1
+ENV PRELOAD_MODEL=1 WARMUP_ON_START=1 FAST_META_LOAD=1
 ENV SAPIENS_MODEL_REVISION=ada1f29aa1fd454ca28665c700923a0101b6b24f
 ENV PERSON_DETECTOR_DIR=/opt/models/detr-resnet-101-dc5
 ENV PERSON_DETECTOR_MODEL=/opt/models/detr-resnet-101-dc5

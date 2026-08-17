@@ -34,6 +34,7 @@ def version() -> dict:
         "compile": _enabled("COMPILE", False),
         "preload_model": _enabled("PRELOAD_MODEL", True),
         "warmup_on_start": _enabled("WARMUP_ON_START", True),
+        "fast_meta_load": _enabled("FAST_META_LOAD", True),
         "model_load_device": os.environ.get("MODEL_LOAD_DEVICE", "auto"),
         "sapiens_model_revision": os.environ.get(
             "SAPIENS_MODEL_REVISION", "unknown"
