@@ -75,15 +75,15 @@ keypoints are in **original video pixel coordinates**.
 ## Deploy
 
 **RunPod (production):** create a queue-based Serverless endpoint from the GHCR
-image. In the endpoint's **Model** field select `facebook/sapiens2-pose-5b` so
-RunPod mounts the checkpoint from its model cache before starting the worker.
-The loader resolves that mount automatically. Keep the default container command
-(`python -u adapters/runpod_handler.py`), enable FlashBoot, set execution timeout
-and job TTL to 24 hours, and set **active workers = 1, max workers = 1**. Prioritize
-the 24 GB L4 / RTX A5000 / RTX 3090 / RTX 4090 pools. The batch-1 eager profile
-fits these cards; requests queue behind the warm worker instead of starting a
-second cold worker. Set the template image to an immutable
-`ghcr.io/la-luche/serve_luche:<40-character-git-sha>` tag.
+image. Leave the endpoint's **Model** field empty: the legacy Model Store entry
+blocked for more than 20 minutes during the 2026-08-17 rollout, while the direct
+Hugging Face download fetched the 20.48 GB checkpoint in 53.6 seconds. Keep the
+default container command (`python -u adapters/runpod_handler.py`), enable
+FlashBoot, set execution timeout and job TTL to 24 hours, and set **active
+workers = 1, max workers = 1**. Prioritize the 24 GB L4 / RTX A5000 / RTX 3090 /
+RTX 4090 pools. The batch-1 eager profile fits these cards; requests queue behind
+the warm worker instead of starting a second cold worker. Set the template image
+to an immutable `ghcr.io/la-luche/serve_luche:<40-character-git-sha>` tag.
 
 **Dedicated RTX 5080 (Vast or lab):** run the same image with port 8000 exposed
 and override the command to `python -u adapters/http_worker.py`. Use persistent
@@ -110,12 +110,30 @@ The production contract is deliberately **warm, eager, and batch 1**:
 - `MODEL_LOAD_DEVICE=cpu` restores fp32 weights in system RAM and moves them to
   CUDA as bf16, allowing the 5B model to start safely on 16–24 GB cards.
 - One active worker is the only way to guarantee no scale-to-zero cold start.
-  FlashBoot and the cached model reduce recovery time but are not an availability
-  guarantee. Keep `workersMax=1`; a burst queues rather than spawning a cold copy.
+  FlashBoot reduces recovery time but is not an availability guarantee. Keep
+  `workersMax=1`; a burst queues rather than spawning a cold copy.
 
-RunPod's cached model avoids downloading the 20 GB checkpoint inside billed
-worker time. A worker replacement still has to initialize the model, but it is
-not offered work until initialization and warmup succeed.
+The direct checkpoint download is observable in the worker log and was faster
+than the legacy Model Store in the measured rollout. A worker replacement still
+has to initialize the model, but it is not offered work until initialization and
+warmup succeed.
+
+### Measured RunPod replacement profile (2026-08-17)
+
+| Stage | Result |
+|---|---:|
+| Immutable image available | 39 s |
+| Download 20.48 GB checkpoint | 53.6 s |
+| CPU checkpoint/model initialization | 249.4 s |
+| Preload + bf16 CUDA transfer complete | 375.3 s from container start |
+| Eager batch-1 warmup | 1.1 s |
+| Handler ready | 376.6 s from container start |
+| Resident / peak warmup VRAM | 9.67 / 9.98 GiB |
+
+RunPod may label a worker `RUNNING` before the SDK handler has registered. Use
+the handler's `worker runtime ready` log line or a successful ping as the
+readiness signal. Normal requests avoid this replacement path because production
+keeps one active worker.
 
 Inference uses one fixed shape per configured batch size. A short final batch is
 padded to `BATCH_SIZE` before the forward and sliced back afterward. Production

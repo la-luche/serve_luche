@@ -5,7 +5,7 @@ URL), get **308 Sapiens2 keypoints per frame** back — either inline (small cli
 or written to R2 (presigned PUT). Same image runs on **RunPod**, a normal Vast
 instance, and the lab RTX 5080.
 
-- **Live RunPod endpoint:** `v29lgubwpc998d`
+- **Live RunPod endpoint:** `uf9tlbqtd90q1y`
 - **Image:** `ghcr.io/la-luche/serve_luche` (public)
 - **Model:** Sapiens2-pose-5b, 308-keypoint Sociopticon (body + feet + hands + face)
 
@@ -33,7 +33,7 @@ Submit a job, poll for the result.
 
 ```bash
 # submit
-curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
+curl -X POST https://api.runpod.ai/v2/uf9tlbqtd90q1y/run \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"input": {
@@ -50,14 +50,14 @@ curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
 # -> {"id": "<job-id>", "status": "IN_QUEUE"}
 
 # poll
-curl https://api.runpod.ai/v2/v29lgubwpc998d/status/<job-id> \
+curl https://api.runpod.ai/v2/uf9tlbqtd90q1y/status/<job-id> \
   -H "Authorization: Bearer $RUNPOD_API_KEY"
 ```
 
 ### Version / health check (unauthenticated)
 Use this to confirm which build a container is running:
 ```bash
-curl -X POST https://api.runpod.ai/v2/v29lgubwpc998d/run \
+curl -X POST https://api.runpod.ai/v2/uf9tlbqtd90q1y/run \
   -H "Authorization: Bearer $RUNPOD_API_KEY" -H "Content-Type: application/json" \
   -d '{"input": {"ping": true}}'
 # -> {"status":"ok","git_sha":"<40-hex>","model_size":"5b",
@@ -204,10 +204,11 @@ The hand joints are indices **21–62**, NOT 92–132. Fingers are `tip → … 
 - **Production latency profile:** one active batch-1 worker, eager inference,
   model preload + first-forward warmup before RunPod readiness. Throughput is
   intentionally lower so the worker can stay resident on a cheaper 24 GB GPU.
-- **Cold start:** configure the endpoint Model as
-  `facebook/sapiens2-pose-5b` to avoid downloading the 20 GB checkpoint in the
-  worker. FlashBoot reduces recovery time; one active worker removes normal
-  scale-to-zero cold starts.
+- **Cold start:** do not attach the legacy RunPod Model Store entry. In the
+  2026-08-17 production rollout it remained in "initializing model files" for
+  more than 20 minutes without starting the container. Direct Hugging Face
+  download fetched the 20.48 GB checkpoint in 53.6 seconds. FlashBoot reduces
+  recovery time; one active worker removes normal scale-to-zero cold starts.
 - **Env vars:** `MODEL_SIZE` (default `5b`), `WEIGHTS_DIR` (`/weights`),
   `RUNPOD_HF_CACHE` (`/runpod-volume/huggingface-cache/hub`),
   `BATCH_SIZE` (`1`), `COMPILE` (`0`=default eager, `1`=Inductor compile),
