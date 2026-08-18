@@ -1,13 +1,18 @@
 # Sapiens2 pose keypoint image — portable across RunPod and dedicated GPUs.
-# The 20 GB Sapiens weights are NOT baked. The much smaller person-detector
-# weights ARE baked so the optional top-down crop path never downloads at runtime.
-# RunPod downloads Sapiens directly; do not attach the legacy Model Store entry.
+# The Sapiens weights ARE baked, as a bf16 copy (~10 GB for 5b) pulled from the
+# data-only image built by build-weights.yml — nothing downloads at runtime.
+# The person-detector weights are baked too. Do not attach the legacy Model
+# Store entry.
 # The Inductor compile-cache is kept in $WEIGHTS_DIR. One image, two entrypoints:
 # RunPod's handler or our provider-neutral HTTP queue on Vast/the lab RTX 5080.
 #
 # runtime base (not devel) keeps the image ~10 GB so it builds on a free GH runner.
 # torch.compile only needs a C++ compiler (g++) + Triton, not nvcc — so we add
 # build-essential and skip the multi-GB CUDA toolkit.
+# Baked checkpoint source — built once per model revision by build-weights.yml.
+ARG WEIGHTS_IMAGE=ghcr.io/la-luche/serve_luche-weights:ada1f29aa1fd454ca28665c700923a0101b6b24f
+FROM ${WEIGHTS_IMAGE} AS weights
+
 FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-runtime@sha256:72f863fa1fe13d5d87a72d00db2c85fb2d43409ee08dd26bc469de4c8a28b427
 
 LABEL org.opencontainers.image.source="https://github.com/la-luche/serve_luche"
@@ -61,6 +66,10 @@ RUN HF_HOME=/tmp/hf-person-build python -c "from huggingface_hub import hf_hub_d
 
 RUN pip install --constraint /tmp/constraints.txt --no-cache-dir \
         decord kornia requests huggingface_hub runpod fastapi uvicorn
+
+# Bake the bf16 checkpoint where core/model.py short-circuits its download.
+# Keep this ~10 GB layer BEFORE the code COPYs so code-only pushes reuse it.
+COPY --from=weights /sapiens2_5b_pose.safetensors /weights/sapiens2_5b_pose.safetensors
 
 COPY core/ /app/core/
 COPY adapters/ /app/adapters/

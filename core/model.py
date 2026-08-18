@@ -1,9 +1,9 @@
 """Load Sapiens2 pose model once and optionally warm its first forward.
 
-Portable across RunPod / Vast: the 20 GB checkpoint is NOT baked into the image.
-RunPod Serverless downloads it directly from Hugging Face; dedicated workers
-should persist ``WEIGHTS_DIR``. A legacy RunPod cached-model mount is still
-recognized for compatibility, but is not part of the production deployment.
+Production images bake a bf16 copy of the checkpoint (~10 GB for 5b) at
+``WEIGHTS_DIR`` — see build-weights.yml — so nothing downloads at runtime.
+Fallbacks, in order: the legacy RunPod cached-model mount, then a direct
+Hugging Face download (dedicated workers should persist ``WEIGHTS_DIR``).
 RunPod Serverless defaults to eager inference: compiling improves throughput but
 adds a large, host-dependent first-forward delay. Dedicated workers can opt back
 in with ``COMPILE=1`` and keep the Inductor cache on persistent storage.
@@ -64,6 +64,14 @@ def _runpod_cached_checkpoint() -> str | None:
 
 
 def _ensure_checkpoint() -> str:
+    # Baked-into-image checkpoint (bf16, written by build-weights.yml) — the
+    # production path. No network, no HF, cold start = local NVMe read only.
+    baked = os.path.join(WEIGHTS_DIR, CKPT_NAME)
+    if os.path.isfile(baked):
+        gb = os.path.getsize(baked) / 1e9
+        log(f"baked checkpoint present ({gb:.1f} GB) at {baked}")
+        return baked
+
     cached = _runpod_cached_checkpoint()
     if cached:
         gb = os.path.getsize(cached) / 1e9

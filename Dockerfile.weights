@@ -1,0 +1,6 @@
+# Data-only image: the bf16 Sapiens2 pose checkpoint, nothing else.
+# Built by .github/workflows/build-weights.yml, consumed by the main
+# Dockerfile via COPY --from. Context is the weights/ directory.
+FROM scratch
+LABEL org.opencontainers.image.source="https://github.com/la-luche/serve_luche"
+COPY sapiens2_5b_pose.safetensors /sapiens2_5b_pose.safetensors
