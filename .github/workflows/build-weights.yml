@@ -43,7 +43,7 @@ jobs:
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
           pip install --index-url https://download.pytorch.org/whl/cpu torch
-          pip install safetensors huggingface_hub
+          pip install safetensors huggingface_hub numpy
           python tools/convert_checkpoint_bf16.py \
             --out weights/sapiens2_5b_pose.safetensors
           df -h
