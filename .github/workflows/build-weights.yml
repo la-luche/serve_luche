@@ -34,6 +34,14 @@ jobs:
         env:
           SAPIENS_MODEL_REVISION: ${{ inputs.revision }}
         run: |
+          # mmap of the 20 GB fp32 file fails with ENOMEM under the runner's
+          # default heuristic overcommit on 16 GB RAM; the bf16 dict (~10 GB)
+          # also needs swap headroom. /mnt has ~65 GB scratch.
+          sudo sysctl vm.overcommit_memory=1
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
           pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install safetensors huggingface_hub
           python tools/convert_checkpoint_bf16.py \
