@@ -206,8 +206,9 @@ def evaluate_hubu(
 
 
 TULIP_TASKS = {
-    "7. Finger_tapping_left": [("Finger tapping - Left hand", "fingerTapping")],
-    "8. FInger_tapping_right": [("Finger tapping - Right hand", "fingerTapping")],
+    # 7/8 are sequential finger opposition, not clinical thumb-index tapping.
+    "9. Index_Finger_tapping_left": [("Finger tapping - Left hand", "fingerTapping")],
+    "10. Index_Finger_tapping_right": [("Finger tapping - Right hand", "fingerTapping")],
     "20. Cross_the_arms_and_rise_from_the_chair": [
         ("Arising from chair", "arisingFromChair")
     ],
