@@ -45,7 +45,7 @@ def detect_person_track_rfdetr(decoder, *, device, threshold=.30, cancel_hook=No
     if batch_size < 1:
         raise ValueError('RFDETR_BATCH_SIZE must be >= 1')
     detector, revision = _get_detector(device)
-    samples=[];start=time.perf_counter()
+    samples=[];detection_started=time.perf_counter()
     # Complete the video pass first. The policy uses future evidence too.
     for start in range(0, decoder.num_frames, batch_size):
         if cancel_hook:cancel_hook()
@@ -58,7 +58,7 @@ def detect_person_track_rfdetr(decoder, *, device, threshold=.30, cancel_hook=No
         for idx,prediction in zip(indices,predictions):
             candidates=[(np.asarray(b,dtype=np.float32),float(s)) for b,s,label in zip(prediction.xyxy,prediction.confidence,prediction.class_id) if int(label)==1]
             samples.append((idx,candidates))
-    detection_seconds=time.perf_counter()-start
+    detection_seconds=time.perf_counter()-detection_started
     if cancel_hook:cancel_hook()
     policy=replace(BoxPolicy(),high_score=threshold,low_score=min(.15,threshold))
     start=time.perf_counter()
