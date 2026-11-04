@@ -1,0 +1,23 @@
+# Reuse the deployed, immutable runtime and baked BF16 Sapiens checkpoint.
+FROM ghcr.io/la-luche/serve_luche:979cbb0a906e1300a957edb90db1b257c9a7e0d9
+
+RUN pip install --no-cache-dir --constraint /tmp/constraints.txt \
+        rfdetr==1.11.2 supervision==0.31.4 pyDeprecate==0.9.0
+RUN mkdir -p /opt/models/rfdetr && python -c \
+    "import hashlib,urllib.request; p='/opt/models/rfdetr/rf-detr-large-2026.pth'; urllib.request.urlretrieve('https://storage.googleapis.com/rfdetr/rf-detr-large-2026.pth',p); assert hashlib.md5(open(p,'rb').read()).hexdigest()=='5cb72153541cbcb9aa6efa26222acc75'"
+
+WORKDIR /app
+COPY core/ /app/core/
+COPY adapters/ /app/adapters/
+COPY tests/ /app/tests/
+COPY tools/evaluate_tulip_methodology.py tools/evaluate_r2_heuristics.py /app/tools/
+RUN REQUIRE_SAPIENS_TESTS=1 python -m unittest discover -s /app/tests -v
+
+ENV PERSON_DETECTOR_BACKEND=rfdetr PERSON_DETECTOR_DEVICE=cuda
+ENV RFDETR_WEIGHTS=/opt/models/rfdetr/rf-detr-large-2026.pth RFDETR_BATCH_SIZE=8
+ENV PERSON_DETECTOR_NAME=RF-DETR-Large-2026 REQUIRE_PERSON_DETECTION=1
+ENV MODEL_SIZE=5b BATCH_SIZE=1 COMPILE=0 PRELOAD_MODEL=1 WARMUP_ON_START=1
+ENV OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
+ARG GIT_SHA=dev
+ENV GIT_SHA=${GIT_SHA}
+CMD ["python", "-u", "adapters/runpod_handler.py"]

@@ -1,7 +1,7 @@
 """run_video(): decode -> optional person boxes -> Sapiens2 keypoints -> R2.
 
-Preprocessing (top-down UDP affine + normalize) is batched on the GPU. The default
-path retains the original full-frame box exactly; opt-in person detection supplies
+Preprocessing (top-down affine + normalize) is batched on the GPU. Crops are
+clipped to the source frame before resizing. Opt-in person detection supplies
 one interpolated box per frame. Keypoints always land in original video pixels.
 """
 from __future__ import annotations
@@ -42,7 +42,7 @@ def run_video(
     conf_round: int = 3,
     person_detection: bool = False,
     person_detection_stride: int = 5,
-    person_box_overflow: float = 0.25,
+    person_box_overflow: float = 0.10,
     person_detection_threshold: float = 0.3,
     cancel_check: Callable[[], bool] | None = None,
 ) -> dict:
@@ -56,6 +56,8 @@ def run_video(
         raise ValueError("person_box_overflow must be between 0 and 2")
     if not 0.0 < person_detection_threshold <= 1.0:
         raise ValueError("person_detection_threshold must be in (0, 1]")
+    if os.environ.get("REQUIRE_PERSON_DETECTION", "0") == "1" and not person_detection:
+        raise ValueError("person detection is required on this endpoint")
 
     def check_cancelled() -> None:
         if cancel_check is not None and cancel_check():
@@ -94,7 +96,11 @@ def run_video(
                 )
                 detection_stats["device"] = detector_device
                 person_meta.update(detection_stats)
+            except InferenceCancelled:
+                raise
             except Exception as exc:
+                if os.environ.get("REQUIRE_PERSON_DETECTION", "0") == "1":
+                    raise
                 # Detection is an optional preprocessing enhancement. Preserve
                 # the established full-frame pose path and make degradation
                 # explicit in durable result metadata.
@@ -208,16 +214,17 @@ def run_video(
             f"peak_vram={peak_vram_gib} GiB")
 
         results = {
+            "pose_crop_policy": pre.crop_policy,
             "keypoint_format": KEYPOINT_FORMAT,
             "git_sha": os.environ.get("GIT_SHA", "unknown"),
             "model_size": os.environ.get("MODEL_SIZE", "5b"),
             "sapiens_model_revision": os.environ.get(
                 "SAPIENS_MODEL_REVISION", "unknown"
             ),
-            "person_detector": os.environ.get(
+            "person_detector": person_meta.get("model") or os.environ.get(
                 "PERSON_DETECTOR_NAME", "facebook/detr-resnet-101-dc5"
             ),
-            "person_detector_revision": os.environ.get(
+            "person_detector_revision": person_meta.get("revision") or os.environ.get(
                 "PERSON_DETECTOR_REVISION", "unknown"
             ),
             "num_keypoints": len(frames_out[0]["keypoints"]) if frames_out else 0,
@@ -232,6 +239,15 @@ def run_video(
         check_cancelled()
         elapsed = round(time.time() - t0, 2)
         summary = {
+            "gpu_name": torch.cuda.get_device_name() if cuda else "cpu",
+            "batch_size": batch_size,
+            "timing": {
+                "decode_seconds": round(t_dec, 4),
+                "preprocess_seconds": round(t_pre, 4),
+                "pose_forward_seconds": round(t_fwd, 4),
+                "keypoint_decode_seconds": round(t_codec, 4),
+            },
+            "pose_crop_policy": pre.crop_policy,
             "status": "ok",
             "num_processed_frames": n,
             "num_source_frames": dec.num_frames,
@@ -243,10 +259,10 @@ def run_video(
                 "SAPIENS_MODEL_REVISION", "unknown"
             ),
             "git_sha": os.environ.get("GIT_SHA", "unknown"),
-            "person_detector": os.environ.get(
+            "person_detector": person_meta.get("model") or os.environ.get(
                 "PERSON_DETECTOR_NAME", "facebook/detr-resnet-101-dc5"
             ),
-            "person_detector_revision": os.environ.get(
+            "person_detector_revision": person_meta.get("revision") or os.environ.get(
                 "PERSON_DETECTOR_REVISION", "unknown"
             ),
             "person_detection": person_meta,

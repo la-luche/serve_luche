@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 
 def _positive_integer(value, *, name: str) -> int:
@@ -44,9 +45,12 @@ def parse_infer_input(inp: dict) -> tuple[str, dict]:
     ):
         raise ValueError("result_put_url must be a non-empty string or null")
 
-    person_detection = inp.get("person_detection", False)
+    required_detection = os.environ.get("REQUIRE_PERSON_DETECTION", "0") == "1"
+    person_detection = inp.get("person_detection", required_detection)
     if type(person_detection) is not bool:
         raise ValueError("person_detection must be a JSON boolean")
+    if required_detection and not person_detection:
+        raise ValueError("person detection is required on this endpoint")
 
     kwargs = {
         "result_put_url": result_put_url,
@@ -55,11 +59,11 @@ def parse_infer_input(inp: dict) -> tuple[str, dict]:
         ),
         "person_detection": person_detection,
         "person_detection_stride": _positive_integer(
-            inp.get("person_detection_stride", 5),
+            inp.get("person_detection_stride", 1 if required_detection else 5),
             name="person_detection_stride",
         ),
         "person_box_overflow": _bounded_number(
-            inp.get("person_box_overflow", 0.25),
+            inp.get("person_box_overflow", 0.10),
             name="person_box_overflow",
             lower=0.0,
             upper=2.0,

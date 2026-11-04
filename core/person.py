@@ -1,10 +1,11 @@
-"""Optional sparse person detection and temporally stable bounding boxes.
+"""Person detection and temporally stable bounding boxes.
 
 The Sapiens pose model is top-down: it expects a reasonably tight person box.
 DETR runs on a sparse set of source frames, detections are associated into
 tracks, and the selected track is interpolated for every source frame. The
 heavy detector objects are loaded lazily so the default full-frame path and
-health checks pay no detector startup cost.
+health checks pay no detector startup cost. The experimental RF-DETR backend
+instead detects every source frame, then postprocesses the complete timeline.
 """
 from __future__ import annotations
 
@@ -348,6 +349,15 @@ def detect_person_track(
     cancel_hook: Callable[[], None] | None = None,
 ) -> tuple[np.ndarray | None, dict]:
     """Detect, track, and interpolate one patient box for every source frame."""
+    backend = os.environ.get("PERSON_DETECTOR_BACKEND", "detr").lower()
+    if backend == "rfdetr":
+        from .rfdetr_person import detect_person_track_rfdetr
+
+        return detect_person_track_rfdetr(
+            decoder, device=device, threshold=threshold, cancel_hook=cancel_hook
+        )
+    if backend != "detr":
+        raise ValueError(f"unknown PERSON_DETECTOR_BACKEND: {backend}")
     indices = list(range(0, decoder.num_frames, detection_stride))
     if indices[-1] != decoder.num_frames - 1:
         indices.append(decoder.num_frames - 1)

@@ -218,3 +218,51 @@ Yandex's serverless (Serverless Containers, Cloud Functions) is **CPU-only**, an
 Compute tops out at A100 80GB (no H100). No scale-to-zero GPU. If ever needed
 (RU data residency), run this same image on a Yandex **Managed K8s GPU node
 group** with a small always-on deployment instead of scale-to-zero.
+
+## Experimental offline RF-DETR preprocessing
+
+Install `requirements-rfdetr.txt` alongside the service, provide the local
+`rf-detr-large-2026.pth` checkpoint via `RFDETR_WEIGHTS`, and set
+`PERSON_DETECTOR_BACKEND=rfdetr` and `PERSON_DETECTOR_DEVICE=cuda`. An inference
+request with `person_detection=true` then detects **every source frame**, completes
+offline deduplication/association/gap handling, and supplies the resulting boxes
+to the existing pose loop. RF-DETR always uses stride 1 regardless of the legacy
+`person_detection_stride` parameter. Defaults and deployed callers are unchanged.
+
+`core/person_postprocess.py` also accepts saved per-frame detections without a
+GPU. Missing box rows remain NaN for full-frame pose fallback; pose is never
+skipped because detection is missing. The selected padding is now 10% per side
+in the staged request parser and pose function. Review the full-video experiment before
+enabling this backend in production; geometric association is not identity
+recognition. Detector model and checkpoint SHA are included in result metadata.
+
+RF-DETR's current experimental smoother favors repeated larger boxes using a
+90th-percentile outer envelope over ±0.30 seconds, then a symmetric ±0.12-second
+filter. It contains the current measured box and preserves unsupported gaps.
+The older smoother remains available as `BoxPolicy(smoothing_method="legacy")`
+for reproducible comparisons. Padding remains a separate `person_box_overflow`
+request parameter; the 50-frame padding review compared 0, 0.10 and 0.25, and
+the selected default is now 0.10. The production deployment remains unchanged.
+
+Pose crops now default to `crop_policy="in_frame"` in the staged preprocessor:
+requested padding and aspect expansion are clipped to the recorded image. No
+black margin is added, and missing detections use the exact full frame without
+the previous 1.25× expansion. Rectangles touching the image boundary may have
+different horizontal/vertical resize factors; the inverse keypoint mapping uses
+the actual clipped dimensions. `crop_policy="legacy"` remains available for
+reproducing earlier experiments. The same 50 selected frames were rerun for
+the border comparison. This source change has not been deployed to production.
+
+The selected experimental default is **fixed 768×1024 (width×height)** with
+**10% padding per side**, using the bounded `GpuPreprocessor` above. Crop
+geometry retains the existing aspect expansion before clipping to the frame;
+the bounded region is then resized to the fixed input, including upscaling or
+different horizontal/vertical scale factors where needed. No artificial image
+border is added. Missing detections still run pose on the full source frame,
+resized to the same fixed dimensions. This is already the staged `run_video`
+path; production rollout remains deferred.
+
+`core/native_crops.py` and the native-pixel benchmark remain saved alternatives,
+not the selected default. The same 50-frame comparison measured 339 ms/frame
+native versus 427 ms/frame for the saved fixed-size reference (eager BF16,
+batch 1). Peter selected fixed dimensions after reviewing this tradeoff.

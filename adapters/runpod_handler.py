@@ -51,6 +51,10 @@ def prepare_worker() -> None:
     warm = _enabled("WARMUP_ON_START", True)
     log(f"preparing worker before RunPod readiness: warmup={warm}")
     _load_runtime(warm=warm)
+    if os.environ.get("PERSON_DETECTOR_BACKEND") == "rfdetr":
+        from core.rfdetr_person import warmup_rfdetr
+
+        warmup_rfdetr(os.environ.get("PERSON_DETECTOR_DEVICE", "cuda"))
     log(f"worker runtime ready in {time.time() - started:.1f}s")
 
 

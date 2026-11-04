@@ -1,9 +1,20 @@
 import unittest
+import os
+from unittest.mock import patch
 
 from core.request import parse_infer_input
 
 
 class RequestParsingTests(unittest.TestCase):
+    def test_required_detection_defaults_to_every_frame_and_rejects_opt_out(self):
+        with patch.dict(os.environ, {'REQUIRE_PERSON_DETECTION': '1'}):
+            _, kwargs = parse_infer_input({'video_url': 'video.mp4'})
+            self.assertTrue(kwargs['person_detection'])
+            self.assertEqual(kwargs['person_detection_stride'], 1)
+            self.assertEqual(kwargs['person_box_overflow'], .10)
+            with self.assertRaisesRegex(ValueError, 'required'):
+                parse_infer_input({'video_url': 'video.mp4', 'person_detection': False})
+
     def test_valid_person_detection_options(self):
         video_url, kwargs = parse_infer_input(
             {

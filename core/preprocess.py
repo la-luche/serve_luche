@@ -1,9 +1,9 @@
 """Batched GPU preprocessing — replaces the per-frame CPU mmpose pipeline.
 
-For a full-frame bbox on a fixed-size video the top-down UDP affine is a single
-constant 2x3 matrix. With optional person detection it becomes one matrix per
-frame. We get both from sapiens' OWN functions (no reimplementation), then apply
-them to a whole batch with kornia.warp_affine on the GPU and normalize.
+The default crop never extends outside the source image. Requested context and
+3:4 aspect expansion are clipped to real image pixels, then resized to the
+model input. Edge crops may therefore be resized differently along x and y.
+``legacy`` retains the old out-of-frame, zero-filled geometry for comparisons.
 
 codec.decode + the (input_size, bbox_center, bbox_scale) back-mapping are unchanged.
 decord yields RGB and the model wants RGB (reference does bgr_to_rgb on cv2's BGR),
@@ -34,10 +34,22 @@ def _fix_aspect(scale: np.ndarray, ar: float) -> np.ndarray:
 
 
 class GpuPreprocessor:
-    def __init__(self, h_img: int, w_img: int, device: str, dtype: torch.dtype):
+    def __init__(
+        self, h_img: int, w_img: int, device: str, dtype: torch.dtype,
+        *, crop_policy: str = "in_frame",
+    ):
+        if crop_policy not in {"in_frame", "legacy"}:
+            raise ValueError("crop_policy must be in_frame or legacy")
+        if min(h_img, w_img) < 2:
+            raise ValueError("source dimensions must be at least 2 pixels")
+        self.crop_policy = crop_policy
+        self.source_max = np.asarray([w_img - 1, h_img - 1], dtype=np.float32)
         bbox = np.array([0, 0, w_img - 1, h_img - 1], dtype=np.float32)
-        center, scale = bbox_xyxy2cs(bbox, padding=1.25)
-        scale = _fix_aspect(scale, INPUT_W / INPUT_H)
+        if crop_policy == "legacy":
+            center, scale = bbox_xyxy2cs(bbox, padding=1.25)
+            scale = _fix_aspect(scale, INPUT_W / INPUT_H)
+        else:
+            center, scale = self.source_max * 0.5, self.source_max.copy()
         M = get_udp_warp_matrix(center, scale, 0.0, (INPUT_W, INPUT_H))  # (2,3)
         self.full_matrix = np.asarray(M, dtype=np.float32)
         self.full_M = torch.as_tensor(M, dtype=torch.float32, device=device)[None]
@@ -48,13 +60,29 @@ class GpuPreprocessor:
         self.device = device
         self.dtype = dtype
 
+    def _person_geometry(self, bbox: np.ndarray, padding: float):
+        if self.crop_policy == "in_frame":
+            bbox = np.clip(bbox.reshape(2, 2), 0, self.source_max).reshape(4)
+            if np.any(bbox[2:] <= bbox[:2]):
+                return self.full_center, self.full_scale, self.full_matrix
+        center, scale = bbox_xyxy2cs(bbox, padding=padding)
+        scale = _fix_aspect(scale, INPUT_W / INPUT_H)
+        if self.crop_policy == "in_frame":
+            lower = np.maximum(center - 0.5 * scale, 0)
+            upper = np.minimum(center + 0.5 * scale, self.source_max)
+            center, scale = (lower + upper) * 0.5, upper - lower
+        matrix = get_udp_warp_matrix(center, scale, 0.0, (INPUT_W, INPUT_H))
+        return center, scale, matrix
+
     def geometry(
         self,
         batch_size: int,
         bboxes: np.ndarray | None = None,
         bbox_overflow: float = 0.0,
     ) -> tuple[torch.Tensor, dict]:
-        """Return per-frame UDP matrices and their inverse-map metadata."""
+        """Return per-frame affine matrices and their inverse-map metadata."""
+        if not np.isfinite(bbox_overflow) or bbox_overflow < 0:
+            raise ValueError("bbox_overflow must be finite and nonnegative")
         if bboxes is None:
             M = self.full_M.expand(batch_size, -1, -1)
             centers = np.repeat(self.full_center[None], batch_size, axis=0)
@@ -74,11 +102,7 @@ class GpuPreprocessor:
                     and bbox[3] > bbox[1]
                 )
                 if valid:
-                    center, scale = bbox_xyxy2cs(bbox, padding=padding)
-                    scale = _fix_aspect(scale, INPUT_W / INPUT_H)
-                    matrix = get_udp_warp_matrix(
-                        center, scale, 0.0, (INPUT_W, INPUT_H)
-                    )
+                    center, scale, matrix = self._person_geometry(bbox, padding)
                 else:
                     center, scale, matrix = (
                         self.full_center,
@@ -97,6 +121,7 @@ class GpuPreprocessor:
             "input_size": np.asarray((INPUT_W, INPUT_H), dtype=np.float32),
             "bbox_center": centers,
             "bbox_scale": scales,
+            "crop_policy": self.crop_policy,
         }
 
     @torch.inference_mode()
@@ -110,6 +135,11 @@ class GpuPreprocessor:
         x = frames.float()
         M, meta = self.geometry(x.shape[0], bboxes, bbox_overflow)
         # align_corners=True to match cv2.warpAffine (validated: mean diff 0.08/255)
-        x = warp_affine(x, M, (INPUT_H, INPUT_W), mode="bilinear", align_corners=True)
+        # All in_frame sampling coordinates are inside the source. Border mode
+        # only guards floating-point roundoff at the outermost source pixel.
+        x = warp_affine(
+            x, M, (INPUT_H, INPUT_W), mode="bilinear", align_corners=True,
+            padding_mode="border" if self.crop_policy == "in_frame" else "zeros",
+        )
         normalized = ((x - self.mean) / self.std).to(self.dtype)
         return normalized, meta

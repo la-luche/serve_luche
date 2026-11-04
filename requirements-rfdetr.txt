@@ -1,0 +1,2 @@
+# Optional offline RF-DETR preprocessing backend; install alongside the service.
+rfdetr==1.11.2

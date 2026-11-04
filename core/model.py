@@ -174,12 +174,14 @@ def warmup(batch_size: int | None = None) -> float:
     log(f"model warmup starting: batch={batch} compile={_COMPILE}")
     started = time.time()
     torch.cuda.reset_peak_memory_stats()
-    inputs = torch.zeros(
-        (batch, 3, 1024, 768),
-        device=DEVICE,
-        dtype=torch.bfloat16,
-    )
     with torch.inference_mode():
+        # The real preprocessor returns inference tensors. Warm the same kind
+        # of tensor so compilation does not specialize a second time on job 1.
+        inputs = torch.zeros(
+            (batch, 3, 1024, 768),
+            device=DEVICE,
+            dtype=torch.bfloat16,
+        )
         output = FORWARD(inputs)
     torch.cuda.synchronize()
     elapsed = time.time() - started
