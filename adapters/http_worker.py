@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 from core import auth
 from core.errors import InferenceCancelled
 from core.log import log
+from core.request import parse_infer_input
 
 
 class InferRequest(BaseModel):
@@ -40,26 +41,17 @@ class InferRequest(BaseModel):
     result_put_url: str | None = None
     frame_stride: int = Field(default=1, ge=1)
     batch_size: int | None = Field(default=None, ge=1)
-    person_detection: StrictBool = False
-    person_detection_stride: int = Field(default=5, ge=1)
-    person_box_overflow: float = Field(default=0.25, ge=0.0, le=2.0)
+    person_detection: StrictBool = Field(default_factory=lambda: os.environ.get("REQUIRE_PERSON_DETECTION") == "1")
+    person_detection_stride: int = Field(default=1, ge=1)
+    person_box_overflow: float = Field(default=0.10, ge=0.0, le=2.0)
     person_detection_threshold: float = Field(default=0.3, gt=0.0, le=1.0)
 
 
 def _execute(req: InferRequest, cancelled: threading.Event) -> dict:
-    from core.infer import DEFAULT_BATCH_SIZE, run_video
+    from core.infer import run_video
 
-    return run_video(
-        req.video_url,
-        result_put_url=req.result_put_url,
-        frame_stride=req.frame_stride,
-        batch_size=req.batch_size or DEFAULT_BATCH_SIZE,
-        person_detection=req.person_detection,
-        person_detection_stride=req.person_detection_stride,
-        person_box_overflow=req.person_box_overflow,
-        person_detection_threshold=req.person_detection_threshold,
-        cancel_check=cancelled.is_set,
-    )
+    video_url, kwargs = parse_infer_input(req.model_dump())
+    return run_video(video_url, **kwargs, cancel_check=cancelled.is_set)
 
 
 class JobManager:
@@ -311,8 +303,10 @@ def runsync(payload: dict):
 
 def main():
     import uvicorn
+    from adapters.runpod_handler import prepare_worker
 
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
+    prepare_worker()
+    uvicorn.run(app, host=os.environ.get("BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8000")))
 
 
 if __name__ == "__main__":

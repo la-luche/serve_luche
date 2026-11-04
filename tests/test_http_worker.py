@@ -1,14 +1,27 @@
 import unittest
 import threading
+import os
+from unittest.mock import patch
 from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
 
 from adapters.http_worker import InferRequest, JobManager, app
 from core.errors import InferenceCancelled
+from core.request import parse_infer_input
 
 
 class HttpWorkerTests(unittest.TestCase):
+    def test_required_detection_and_padding_match_serverless(self):
+        with patch.dict(os.environ, {"REQUIRE_PERSON_DETECTION": "1"}):
+            req = InferRequest(api_key="test", video_url="https://example/video")
+            _, kwargs = parse_infer_input(req.model_dump())
+            self.assertTrue(kwargs["person_detection"])
+            self.assertEqual(kwargs["person_detection_stride"], 1)
+            self.assertEqual(kwargs["person_box_overflow"], .10)
+            with self.assertRaises(ValueError):
+                parse_infer_input({**req.model_dump(), "person_detection": False})
+
     def setUp(self):
         self.client = TestClient(app)
 
