@@ -35,6 +35,7 @@ def version() -> dict:
         "person_detection_required": _enabled("REQUIRE_PERSON_DETECTION", False),
         "detector_batch_size": int(os.environ.get("RFDETR_BATCH_SIZE", "8")),
         "compile": _enabled("COMPILE", False),
+        "compile_mode": os.environ.get("COMPILE_MODE", "default"),
         "preload_model": _enabled("PRELOAD_MODEL", True),
         "warmup_on_start": _enabled("WARMUP_ON_START", True),
         "fast_meta_load": _enabled("FAST_META_LOAD", True),

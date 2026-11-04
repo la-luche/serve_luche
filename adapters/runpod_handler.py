@@ -10,6 +10,7 @@ the first real job. Set ``PRELOAD_MODEL=0`` only for local/control-plane smoke
 tests that intentionally need a lightweight process.
 """
 import os
+import sys
 import time
 from collections.abc import Callable
 
@@ -20,6 +21,7 @@ from core.log import log
 from core.request import parse_infer_input
 
 _RUN_VIDEO: Callable | None = None
+_PREPARE_SECONDS: float | None = None
 
 
 def _enabled(name: str, default: bool) -> bool:
@@ -43,6 +45,7 @@ def _load_runtime(*, warm: bool) -> Callable:
 
 
 def prepare_worker() -> None:
+    global _PREPARE_SECONDS
     if not _enabled("PRELOAD_MODEL", True):
         log("model preload disabled; first inference will initialize the runtime")
         return
@@ -55,7 +58,8 @@ def prepare_worker() -> None:
         from core.rfdetr_person import warmup_rfdetr
 
         warmup_rfdetr(os.environ.get("PERSON_DETECTOR_DEVICE", "cuda"))
-    log(f"worker runtime ready in {time.time() - started:.1f}s")
+    _PREPARE_SECONDS = time.time() - started
+    log(f"worker runtime ready in {_PREPARE_SECONDS:.1f}s")
 
 
 def handler(event):
@@ -67,7 +71,14 @@ def handler(event):
         }
 
     if inp.get("ping"):
-        return auth.version()
+        version = auth.version()
+        version["runtime_prepare_seconds"] = _PREPARE_SECONDS
+        model = sys.modules.get("core.model")
+        if model is not None and getattr(model, "DEVICE", None) == "cuda":
+            import torch
+
+            version["gpu_name"] = torch.cuda.get_device_name()
+        return version
 
     if not auth.check(inp.get("api_key")):
         log("job rejected: unauthorized")

@@ -149,7 +149,9 @@ def _load():
     fwd = model
     if _COMPILE and device == "cuda":
         log("torch.compile enabled — compiling on first forward (can take minutes)")
-        fwd = torch.compile(model)
+        fwd = torch.compile(
+            model, dynamic=False, mode=os.environ.get("COMPILE_MODE", "default")
+        )
     else:
         log("torch.compile DISABLED — running eager")
 
@@ -182,7 +184,8 @@ def warmup(batch_size: int | None = None) -> float:
             device=DEVICE,
             dtype=torch.bfloat16,
         )
-        output = FORWARD(inputs)
+        for _ in range(3 if _COMPILE else 1):
+            output = FORWARD(inputs)
     torch.cuda.synchronize()
     elapsed = time.time() - started
     peak_gib = torch.cuda.max_memory_allocated() / 2**30
