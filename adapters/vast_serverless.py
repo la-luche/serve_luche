@@ -45,7 +45,7 @@ def main():
     benchmark_token = secrets.token_urlsafe(32)
     env = {**os.environ, "PORT": "18000", "BENCHMARK_TOKEN": benchmark_token}
     with log_path.open("w") as log_file:
-        proc = subprocess.Popen(["/opt/conda/bin/python", "-u", "-m", "adapters.vast_model_server"],
+        proc = subprocess.Popen(["/usr/local/bin/luche-model-python", "-u", "-m", "adapters.vast_model_server"],
                                 env=env, stdout=log_file, stderr=subprocess.STDOUT)
         try:
             from vastai import Worker, WorkerConfig, HandlerConfig, BenchmarkConfig, LogActionConfig
@@ -59,7 +59,7 @@ def main():
                         dataset=[{"benchmark_token": benchmark_token, "num_frames": 8}],
                         runs=2, concurrency=1),
                 )],
-                log_action_config=LogActionConfig(on_load=["LUCHE_MODEL_READY"],
+                log_action_config=LogActionConfig(on_load=["Uvicorn running on"],
                                                   on_error=["Traceback (most recent call last):"]),
             )).run()
         finally:

@@ -1,6 +1,9 @@
 FROM ghcr.io/la-luche/serve_luche:0e56c1b81dfccec29c999bd14e793413987a72ca
-RUN python -m venv /opt/vast && /opt/vast/bin/pip install --no-cache-dir vastai==1.11.0
+RUN ln -s "$(command -v python)" /usr/local/bin/luche-model-python \
+    && python -m venv /opt/vast && /opt/vast/bin/pip install --no-cache-dir vastai==1.11.0
 COPY adapters/ /app/adapters/
+COPY tests/ /app/tests/
+RUN REQUIRE_SAPIENS_TESTS=1 python -m unittest discover -s /app/tests -v
 RUN mkdir -p /app/assets && ffmpeg -v error -f lavfi -i testsrc2=size=768x1024:rate=30 \
     -frames:v 8 -c:v libx264 -pix_fmt yuv420p /app/assets/startup.mp4
 ENV BIND_HOST=0.0.0.0 COMPILE=0 PRELOAD_MODEL=1 WARMUP_ON_START=1
