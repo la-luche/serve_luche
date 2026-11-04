@@ -33,6 +33,9 @@ def infer(payload: dict):
 
 if __name__ == "__main__":
     import uvicorn
+    import torch
+    if "H100" not in torch.cuda.get_device_name().upper():
+        raise RuntimeError("this Vast endpoint accepts H100 GPUs only")
     from adapters.runpod_handler import prepare_worker
     prepare_worker()
     print("LUCHE_MODEL_READY", flush=True)

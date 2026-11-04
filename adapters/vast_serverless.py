@@ -3,7 +3,34 @@ import os
 import secrets
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+
+def prepare_tls():
+    """Use Vast's documented instance certificate signing flow."""
+    import requests
+    if os.environ.get("USE_SSL") != "true":
+        raise RuntimeError("Vast worker must use TLS")
+    config = Path("/etc/luche-openssl.cnf")
+    config.write_text("[req]\ndistinguished_name=dn\nreq_extensions=v3_req\n[dn]\n"
+                      "[v3_req]\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\n"
+                      "subjectAltName=@alt\n[alt]\nIP.1=0.0.0.0\n")
+    subprocess.run(["openssl", "req", "-newkey", "rsa:2048", "-nodes", "-sha256",
+                    "-subj", "/C=US/ST=CA/CN=pyworker.vast.ai/", "-keyout", "/etc/instance.key",
+                    "-out", "/etc/instance.csr", "-config", str(config)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.chmod("/etc/instance.key", 0o600)
+    for attempt in range(5):
+        r = requests.post("https://console.vast.ai/api/v0/sign_cert/",
+                          params={"instance_id": os.environ["CONTAINER_ID"]},
+                          data=Path("/etc/instance.csr").read_bytes(),
+                          headers={"Content-Type": "application/octet-stream"}, timeout=30)
+        if r.ok:
+            Path("/etc/instance.crt").write_bytes(r.content)
+            return
+        time.sleep(2 ** attempt)
+    raise RuntimeError("Vast instance certificate signing failed")
 
 
 def main():
@@ -13,6 +40,7 @@ def main():
     os.environ.setdefault("USE_SSL", "true")
     if not os.environ.get("MASTER_TOKEN"):
         raise RuntimeError("Vast must supply MASTER_TOKEN for a serverless worker")
+    prepare_tls()
     log_path = Path("/tmp/luche-vast-model.log")
     benchmark_token = secrets.token_urlsafe(32)
     env = {**os.environ, "PORT": "18000", "BENCHMARK_TOKEN": benchmark_token}
