@@ -44,7 +44,11 @@ class Decoder:
         except ImportError as e:  # pragma: no cover
             raise RuntimeError("decord is required for decoding: `pip install decord`") from e
 
-        self._vr = VideoReader(local_path, ctx=cpu(0))
+        # Automatic FFmpeg frame threading fails on some valid GAVD H.264
+        # streams (including EOF/rewind failures). A single decoder thread
+        # passed full detector/pose traversals without changing decoded pixels.
+        self.metadata = {"backend": "decord", "num_threads": 1}
+        self._vr = VideoReader(local_path, ctx=cpu(0), num_threads=1)
         self.fps = float(self._vr.get_avg_fps() or 30.0)
         self.num_frames = len(self._vr)
         f0 = self._vr[0].shape  # (H, W, C)

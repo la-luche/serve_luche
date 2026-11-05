@@ -1,5 +1,6 @@
-# Reuse the validated provider runtime and weights; only adapters change.
+# Reuse the validated provider runtime and weights.
 FROM ghcr.io/la-luche/serve_luche:providers-86d4f95abb5182b268ffbc3cd50e6469ff29147a
+COPY core/ /app/core/
 COPY adapters/ /app/adapters/
 COPY tests/ /app/tests/
 RUN REQUIRE_SAPIENS_TESTS=1 python -m unittest discover -s /app/tests -v

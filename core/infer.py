@@ -74,6 +74,8 @@ def run_video(
     try:
         check_cancelled()
         dec = Decoder(local_path)
+        log(f"decoder ready: {dec.num_frames} frames {dec.width}x{dec.height} "
+            f"{dec.fps:.3f}fps threads={dec.metadata['num_threads']}")
         pre = GpuPreprocessor(dec.height, dec.width, DEVICE, dtype=torch.bfloat16)
         person_boxes = None
         person_meta = {
@@ -87,6 +89,8 @@ def run_video(
                 from .person import detect_person_track
 
                 detector_device = os.environ.get("PERSON_DETECTOR_DEVICE", DEVICE)
+                detection_started = time.time()
+                log("person detection started")
                 person_boxes, detection_stats = detect_person_track(
                     dec,
                     device=detector_device,
@@ -96,6 +100,7 @@ def run_video(
                 )
                 detection_stats["device"] = detector_device
                 person_meta.update(detection_stats)
+                log(f"person detection completed in {time.time()-detection_started:.1f}s")
             except InferenceCancelled:
                 raise
             except Exception as exc:
@@ -214,6 +219,7 @@ def run_video(
             f"peak_vram={peak_vram_gib} GiB")
 
         results = {
+            "video_decoder": dec.metadata,
             "pose_crop_policy": pre.crop_policy,
             "keypoint_format": KEYPOINT_FORMAT,
             "git_sha": os.environ.get("GIT_SHA", "unknown"),
@@ -239,6 +245,7 @@ def run_video(
         check_cancelled()
         elapsed = round(time.time() - t0, 2)
         summary = {
+            "video_decoder": dec.metadata,
             "gpu_name": torch.cuda.get_device_name() if cuda else "cpu",
             "batch_size": batch_size,
             "timing": {
