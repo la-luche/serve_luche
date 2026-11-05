@@ -5,6 +5,7 @@ COPY adapters/ /app/adapters/
 COPY tests/ /app/tests/
 RUN REQUIRE_SAPIENS_TESTS=1 python -m unittest discover -s /app/tests -v
 ENV BIND_HOST=0.0.0.0 COMPILE=0 PRELOAD_MODEL=1 WARMUP_ON_START=1
-ARG GIT_SHA=dev
-ENV GIT_SHA=${GIT_SHA}
+# A same-name ARG is shadowed by the base image's inherited ENV GIT_SHA.
+ARG SOURCE_GIT_SHA=dev
+ENV GIT_SHA=${SOURCE_GIT_SHA}
 CMD ["python", "-u", "-m", "adapters.http_worker"]
