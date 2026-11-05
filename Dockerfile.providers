@@ -1,13 +1,8 @@
-FROM ghcr.io/la-luche/serve_luche:0e56c1b81dfccec29c999bd14e793413987a72ca
-RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -s "$(command -v python)" /usr/local/bin/luche-model-python \
-    && python -m venv /opt/vast && /opt/vast/bin/pip install --no-cache-dir vastai==1.11.0
+# Reuse the validated provider runtime and weights; only adapters change.
+FROM ghcr.io/la-luche/serve_luche:providers-86d4f95abb5182b268ffbc3cd50e6469ff29147a
 COPY adapters/ /app/adapters/
 COPY tests/ /app/tests/
 RUN REQUIRE_SAPIENS_TESTS=1 python -m unittest discover -s /app/tests -v
-RUN mkdir -p /app/assets && ffmpeg -v error -f lavfi -i testsrc2=size=768x1024:rate=30 \
-    -frames:v 8 -c:v libx264 -pix_fmt yuv420p /app/assets/startup.mp4
 ENV BIND_HOST=0.0.0.0 COMPILE=0 PRELOAD_MODEL=1 WARMUP_ON_START=1
 ARG GIT_SHA=dev
 ENV GIT_SHA=${GIT_SHA}
