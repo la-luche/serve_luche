@@ -161,44 +161,79 @@ def _tracklets(per_frame, fps, width, policy):
 
 
 def _merge_duplicate_tracklets(tracks, policy):
-    """Join fragmented representations of one body, not adjacent people.
+    """Preserve the reviewed merge decisions while avoiding repeated pair scans.
 
-    A detector can alternate between nested boxes, briefly producing both.
-    Requiring non-overlapping lifetimes would lose the entire later segment.
-    All shared observations must mostly agree spatially before merging.
+    Only tracklets sharing an observed frame can merge. Unchanged pairs keep
+    their scores; a merge invalidates only pairs touching its surviving slot.
+    Original slots preserve the old nested-loop tie order after deletions.
     """
-    tracks = list(tracks)
-    while True:
-        best = None
-        for i, a in enumerate(tracks):
-            da = {d.frame: d for d in a.observations}
-            for j in range(i+1, len(tracks)):
-                b = tracks[j];db = {d.frame: d for d in b.observations}
-                shared = sorted(da.keys() & db.keys())
-                if not shared:continue
-                overlaps = np.array([iou(da[f].box,db[f].box) for f in shared])
-                # A single common boundary frame needs especially close agreement.
-                threshold = .60 if len(shared)==1 else .50
-                agrees=[];strong_disagreement=False
-                for f,overlap in zip(shared,overlaps):
-                    x,y=da[f],db[f]
-                    contained=intersection(x.box,y.box)/max(min(area(x.box),area(y.box)),1.)
-                    size=np.maximum((x.box[2:]-x.box[:2]+y.box[2:]-y.box[:2])*.5,2)
-                    distance=np.linalg.norm((center(x.box)-center(y.box))/size)
-                    agree=overlap>=threshold or (len(shared)>1 and contained>=.90 and distance<.65)
-                    agrees.append(agree)
-                    if not agree and min(x.score,y.score)>=policy.high_score:strong_disagreement=True
-                if strong_disagreement or np.mean(agrees)<.75:continue
-                quality = float(np.median(overlaps))
-                if best is None or quality > best[0]:best=(quality,i,j)
-        if best is None:return tracks
-        _,i,j=best;a,b=tracks[i],tracks[j]
-        merged={d.frame:d for d in a.observations}
+    import heapq
+
+    tracks = dict(enumerate(tracks))
+    observations = {i: {d.frame: d for d in t.observations}
+                    for i, t in tracks.items()}
+    versions = {i: 0 for i in tracks}
+    by_frame = {}
+    for i, frames in observations.items():
+        for frame in frames:
+            by_frame.setdefault(frame, set()).add(i)
+    heap = []
+
+    def score_pair(i, j):
+        da, db = observations[i], observations[j]
+        shared = sorted(da.keys() & db.keys())
+        if not shared:
+            return
+        overlaps = np.array([iou(da[f].box, db[f].box) for f in shared])
+        threshold = .60 if len(shared) == 1 else .50
+        agrees = []
+        for f, overlap in zip(shared, overlaps):
+            x, y = da[f], db[f]
+            contained = intersection(x.box, y.box) / max(min(area(x.box), area(y.box)), 1.)
+            size = np.maximum((x.box[2:]-x.box[:2]+y.box[2:]-y.box[:2])*.5, 2)
+            distance = np.linalg.norm((center(x.box)-center(y.box))/size)
+            agree = overlap >= threshold or (len(shared) > 1 and contained >= .90 and distance < .65)
+            agrees.append(agree)
+            if not agree and min(x.score, y.score) >= policy.high_score:
+                return
+        if np.mean(agrees) < .75:
+            return
+        quality = float(np.median(overlaps))
+        heapq.heappush(heap, (-quality, i, j, versions[i], versions[j]))
+
+    pairs = set()
+    for slots in by_frame.values():
+        ordered = sorted(slots)
+        for pos, i in enumerate(ordered):
+            pairs.update((i, j) for j in ordered[pos+1:])
+    for i, j in pairs:
+        score_pair(i, j)
+    del pairs
+
+    while heap:
+        _, i, j, vi, vj = heapq.heappop(heap)
+        if i not in tracks or j not in tracks or versions[i] != vi or versions[j] != vj:
+            continue
+        a, b = tracks[i], tracks[j]
+        merged = observations[i].copy()
         for d in b.observations:
-            old=merged.get(d.frame)
-            if old is None or (area(d.box),d.score)>(area(old.box),old.score):merged[d.frame]=d
-        tracks[i]=Tracklet(min(a.id,b.id),[merged[f] for f in sorted(merged)])
-        del tracks[j]
+            old = merged.get(d.frame)
+            if old is None or (area(d.box), d.score) > (area(old.box), old.score):
+                merged[d.frame] = d
+        tracks[i] = Tracklet(min(a.id, b.id), [merged[f] for f in sorted(merged)])
+        observations[i] = merged
+        versions[i] += 1
+        del tracks[j], observations[j], versions[j]
+        neighbors = set()
+        for frame in merged:
+            slots = by_frame[frame]
+            slots.discard(j)
+            slots.add(i)
+            neighbors.update(slots)
+        neighbors.discard(i)
+        for neighbor in neighbors:
+            score_pair(min(i, neighbor), max(i, neighbor))
+    return list(tracks.values())
 
 
 def _importance(track, width, height, n):

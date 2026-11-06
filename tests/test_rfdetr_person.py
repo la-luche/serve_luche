@@ -45,7 +45,7 @@ class RFBackendTests(unittest.TestCase):
             self.assertTrue(all(len(c)==1 for _,c in samples))
             return actual(samples,**kwargs)
         with patch.object(rf,'postprocess_person_detections',side_effect=post), \
-             patch.object(rf.time,'perf_counter',side_effect=[1000.,1002.,1002.,1002.25]):
+             patch.object(rf.time,'perf_counter',side_effect=[1000.,1000.5,1001.,1002.,1002.,1002.,1002.25]):
             boxes,stats=detect_person_track(self.decoder,device='cpu',detection_stride=5,threshold=.3)
         self.assertEqual(self.indices,list(range(19)))
         np.testing.assert_allclose(boxes,np.tile([20,10,60,70],(19,1)))
@@ -56,6 +56,7 @@ class RFBackendTests(unittest.TestCase):
         self.assertEqual(stats['precision'],'float32')
         self.assertEqual(stats['detection_seconds'],2.)
         self.assertEqual(stats['postprocess_seconds'],.25)
+        self.assertEqual(stats['postprocess_implementation'],'indexed_tracklet_merge_v1')
 
     def test_cancellation_during_detection_does_not_start_postprocessing(self):
         def cancel():

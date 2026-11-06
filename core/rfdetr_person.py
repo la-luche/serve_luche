@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from PIL import Image
 from .person_postprocess import BoxPolicy, postprocess_person_detections
+from .log import log
 
 _models = {}
 _revisions = {}
@@ -45,7 +46,7 @@ def detect_person_track_rfdetr(decoder, *, device, threshold=.30, cancel_hook=No
     if batch_size < 1:
         raise ValueError('RFDETR_BATCH_SIZE must be >= 1')
     detector, revision = _get_detector(device)
-    samples=[];detection_started=time.perf_counter()
+    samples=[];detection_started=time.perf_counter();last_progress=detection_started
     # Complete the video pass first. The policy uses future evidence too.
     for start in range(0, decoder.num_frames, batch_size):
         if cancel_hook:cancel_hook()
@@ -58,18 +59,25 @@ def detect_person_track_rfdetr(decoder, *, device, threshold=.30, cancel_hook=No
         for idx,prediction in zip(indices,predictions):
             candidates=[(np.asarray(b,dtype=np.float32),float(s)) for b,s,label in zip(prediction.xyxy,prediction.confidence,prediction.class_id) if int(label)==1]
             samples.append((idx,candidates))
+        now=time.perf_counter()
+        if now-last_progress>=30 or len(samples)==decoder.num_frames:
+            log(f"RF-DETR {len(samples)}/{decoder.num_frames} frames in {now-detection_started:.1f}s")
+            last_progress=now
     detection_seconds=time.perf_counter()-detection_started
     if cancel_hook:cancel_hook()
     policy=replace(BoxPolicy(),high_score=threshold,low_score=min(.15,threshold))
     start=time.perf_counter()
+    log(f"person box postprocessing started: {len(samples)} frames")
     result=postprocess_person_detections(samples,width=decoder.width,height=decoder.height,
         fps=decoder.fps,num_frames=decoder.num_frames,policy=policy)
     postprocess_seconds=time.perf_counter()-start
+    log(f"person box postprocessing completed in {postprocess_seconds:.2f}s")
     fallback=sum(s=='full_frame_fallback' for s in result['status'])
     return result['boxes'],{'backend':'rfdetr','model':'RF-DETR Large / rf-detr-large-2026.pth',
         'revision':revision,'batch_size':batch_size,'precision':'float32',
         'stride':1,'detection_frames':decoder.num_frames,'detection_seconds':detection_seconds,
         'postprocess_seconds':postprocess_seconds,'postprocess_policy':result['policy'],
+        'postprocess_implementation':'indexed_tracklet_merge_v1',
         'suppressed_boxes':sum(len(x) for x in result['suppressed']),
         'interpolated_frames':result['status'].count('interpolated'),
         'weak_supported_frames':result['status'].count('weak_supported'),
